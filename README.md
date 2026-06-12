@@ -95,6 +95,32 @@ After an `innerHTML` swap, re-initialise with:
 basecoat.initAll()
 ```
 
+## CLI
+
+The module ships with a command-line tool that generates `basecoat.css` and `basecoat.js` without running a server — useful for build pipelines and CI.
+
+```sh
+go run github.com/yay101/go-basecoatui/cmd/basecoat \
+  --source ./public \
+  --source ./components \
+  --version ^0.3.11 \
+  --output ./dist
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--source` | — | Source directory (repeatable) |
+| `--cache` | `./.basecoat-cache` | Download cache directory |
+| `--output` | `./dist` | Output directory for generated files |
+| `--version` | `""` | Basecoat version constraint |
+| `--static` | `true` | Disable file watching |
+
+Install globally:
+
+```sh
+go install github.com/yay101/go-basecoatui/cmd/basecoat@latest
+```
+
 ## Package-level configuration
 
 Set these before calling `Init`:
