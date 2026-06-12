@@ -1,6 +1,6 @@
 # go-basecoatui
 
-Zero-dependency Go module that provides a virtual filesystem combining downloaded [Basecoat](https://basecoat.dev) CSS + Tailwind CSS with user-provided component directories. Produces a single minified, tree-shaken `basecoat.css` and `basecoat.js`, and automatically regenerates them when source files change.
+Zero-dependency Go module that provides a virtual filesystem combining downloaded [Basecoat](https://basecoatui.com) CSS + Tailwind CSS with user-provided component directories. Produces a single minified, tree-shaken `basecoat.css` and `basecoat.js`, and automatically regenerates them when source files change.
 
 ## Features
 
