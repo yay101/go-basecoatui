@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>basecoat example</title>
+<link rel="stylesheet" href="/basecoat.css">
+</head>
+<body>
+
+<h1 class="title">basecoat example</h1>
+
+<button class="btn">click me</button>
+
+<div class="dropdown-menu" style="display:inline-block;position:relative">
+  <button class="btn" aria-haspopup="true" aria-expanded="false">dropdown</button>
+  <div data-popover aria-hidden="true" style="position:absolute;top:100%;left:0">
+    <div role="menu">
+      <button role="menuitem" id="dd-1">edit</button>
+      <button role="menuitem" id="dd-2">duplicate</button>
+      <button role="menuitem" id="dd-3" onclick="alert('delete!')">delete</button>
+    </div>
+  </div>
+</div>
+
+<div id="todo-app">
+  <h2>todo</h2>
+  <form>
+    <input type="text" placeholder="add item…" required>
+    <button class="btn" type="submit">add</button>
+  </form>
+  <ul></ul>
+</div>
+
+<template id="todo-item">
+  <li><span></span> <button class="btn-outline" type="button" style="margin-left:0.5rem">✕</button></li>
+</template>
+
+<script src="/basecoat.js"></script>
+</body>
+</html>
