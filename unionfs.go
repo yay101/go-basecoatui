@@ -29,7 +29,6 @@ type UnionFS struct {
 	cssData      []byte
 	jsData       []byte
 	cachePath    string
-	tailwindPath string
 	basecoatPath string
 	resolvedVer  *resolvedVersion
 	embeddedJS   []byte
@@ -98,7 +97,7 @@ func (u *UnionFS) openRootDir() (fs.File, error) {
 // a file change. The result is swapped atomically under a write lock.
 func (u *UnionFS) regenerate() {
 	used := extractUsedClasses(u.sources)
-	css, err := generateCSS(u.sources, u.tailwindPath, u.basecoatPath, used)
+	css, err := generateCSS(u.sources, u.basecoatPath, used)
 	if err != nil {
 		return
 	}

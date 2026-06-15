@@ -55,7 +55,7 @@ func downloadFile(url, dst string) error {
 // checkLatest fetches basecoat's package.json from unpkg and returns the
 // latest published version string. Only called when AutoUpdate is true.
 func checkLatest() (string, error) {
-	resp, err := http.Get("https://unpkg.com/basecoat/package.json")
+	resp, err := http.Get("https://unpkg.com/basecoat-css/package.json")
 	if err != nil {
 		return "", err
 	}

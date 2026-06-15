@@ -7,23 +7,27 @@ import (
 )
 
 // versionEntry maps a single supported basecoat major.minor release to its
-// exact version, download URL, and the Tailwind CSS version it ships with.
+// exact version and download URL. The pre-compiled CSS at BasecoatURL
+// already includes the Tailwind v4 preflight and theme layer, so no
+// separate Tailwind download is needed.
 type versionEntry struct {
 	BasecoatVersion string
 	BasecoatURL     string
-	TailwindVersion string
-	TailwindURL     string
 }
 
 // basecoatVersions is the canonical version table. The key is "major.minor".
 // When basecoat cuts a new release that bumps the required Tailwind version,
 // a new entry is added here and the old one remains for backward compat.
+//
+// BasecoatURL points at basecoat-cdn.min.css, the pre-compiled build that
+// contains only the basecoat component classes (it is built with
+// @source(none) so Tailwind utility classes are not generated). Projects
+// load Tailwind v4 utility classes separately via the @tailwindcss/browser
+// script (see example/public/index.html).
 var basecoatVersions = map[string]versionEntry{
 	"0.3": {
 		BasecoatVersion: "0.3.11",
-		BasecoatURL:     "https://unpkg.com/basecoat@0.3.11/dist/basecoat.css",
-		TailwindVersion: "4",
-		TailwindURL:     "https://unpkg.com/@tailwindcss/core@4/dist/core.css",
+		BasecoatURL:     "https://unpkg.com/basecoat-css@0.3.11/dist/basecoat.cdn.min.css",
 	},
 }
 

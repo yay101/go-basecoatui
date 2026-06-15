@@ -16,20 +16,14 @@ var (
 )
 
 // generateCSS builds the basecoat.css string by concatenating:
-//   - downloaded Tailwind CSS (tree-shaken)
-//   - downloaded basecoat CSS (tree-shaken)
+//   - downloaded basecoat CSS (tree-shaken) — already includes the Tailwind
+//     v4 preflight and theme layer
 //   - all /css/*.css files from every source (tree-shaken)
 //
 // Every chunk is tree-shaken against the used set and the result is minified.
-func generateCSS(sources []sourceFS, tailwindPath, basecoatPath string, used map[string]bool) (string, error) {
+func generateCSS(sources []sourceFS, basecoatPath string, used map[string]bool) (string, error) {
 	var parts []string
 
-	if tailwindPath != "" {
-		data, err := os.ReadFile(tailwindPath)
-		if err == nil {
-			parts = append(parts, treeShakeCSS(string(data), used))
-		}
-	}
 	if basecoatPath != "" {
 		data, err := os.ReadFile(basecoatPath)
 		if err == nil {

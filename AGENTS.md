@@ -5,10 +5,18 @@ Guidance for AI coding agents working on `github.com/yay101/go-basecoatui`.
 ## Project overview
 
 Zero-dependency Go 1.22 module that produces a virtual `fs.FS` layering
-downloaded Basecoat + Tailwind CSS with user-provided component directories.
-It emits a single minified, tree-shaken `basecoat.css` and `basecoat.js`, and
-auto-regenerates them on file changes. A CLI in `cmd/basecoat` produces the
-same output for build pipelines.
+downloaded Basecoat CSS with user-provided component directories. It
+emits a single minified, tree-shaken `basecoat.css` and `basecoat.js`,
+and auto-regenerates them on file changes. A CLI in `cmd/basecoat`
+produces the same output for build pipelines.
+
+The library ships the **basecoat component classes only** (downloaded
+from `basecoat.cdn.min.css`, built with `@source(none)` so no utility
+classes are included). Projects that want Tailwind v4 utility classes
+load them separately — the recommended approach is the
+`@tailwindcss/browser@4` script tag, which generates utilities from the
+HTML at runtime. The tree-shaker then drops any basecoat component
+classes the user's HTML does not reference.
 
 The hard constraint: **only the Go standard library**. No new third-party
 dependencies. If a problem seems to require one, prefer a simpler textual /
@@ -151,8 +159,8 @@ go run ../cmd/basecoat --source ./public --source ./elements --output ./dist
 - `checkLatest()` and `downloadFile()` perform plain `http.Get` with no
   timeout, no retries, and no checksum verification. Network failures
   surface as `Init` errors.
-- Cache layout is `{cacheDir}/{tailwind|basecoat}/v{version}/{kind}.css`.
-  Changing this shape will invalidate every existing user's cache.
+- Cache layout is `{cacheDir}/basecoat/v{version}/basecoat.css`. Changing
+  this shape will invalidate every existing user's cache.
 
 ## What NOT to do
 

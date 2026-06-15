@@ -1,18 +1,4 @@
-.btn{
-  padding:0.5rem 1rem;
-  border:1px solid #ccc;
-  border-radius:0.25rem;
-  cursor:pointer;
-  background:#fff;
-}
-.btn-outline{
-  padding:0.25rem 0.5rem;
-  border:1px solid #ccc;
-  border-radius:0.25rem;
-  cursor:pointer;
-  background:transparent;
-}
-.title{font-size:2rem;font-weight:bold;margin-bottom:1rem;}
-#todo-app{margin-top:2rem;}
-#todo-app ul{list-style:none;padding:0;}
-#todo-app li{margin:0.25rem 0;}
+body{background:var(--background);color:var(--foreground);}
+h1,h2,h3,p{margin:0;}
+ul{list-style:none;padding:0;margin:0;}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:0.85em;background:var(--muted);padding:0.1em 0.35em;border-radius:0.25rem;}

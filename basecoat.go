@@ -90,15 +90,10 @@ func Init(cacheDir string, sources ...fs.FS) (*UnionFS, error) {
 		}
 		u.resolvedVer = rv
 
-		tailwindPath, err := ensureCached(cacheDir, "tailwind", rv.entry.TailwindVersion, rv.entry.TailwindURL)
-		if err != nil {
-			return nil, err
-		}
 		basecoatPath, err := ensureCached(cacheDir, "basecoat", rv.ver, rv.entry.BasecoatURL)
 		if err != nil {
 			return nil, err
 		}
-		u.tailwindPath = tailwindPath
 		u.basecoatPath = basecoatPath
 
 		emb, ok := basecoatUIEmbeds[rv.ver]
