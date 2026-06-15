@@ -1,4 +1,6 @@
 cache/
 example/cache/
+.basecoat-cache/
+example/.basecoat-cache/
 dist/
 example/dist/

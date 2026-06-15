@@ -2,13 +2,7 @@
 
 Zero-dependency Go module that provides a virtual filesystem combining downloaded [Basecoat](https://basecoatui.com) CSS with user-provided component directories. Produces a single minified, tree-shaken `basecoat.css` and `basecoat.js`, and automatically regenerates them when source files change.
 
-The library ships the **basecoat component classes only** (downloaded from `basecoat.cdn.min.css`, which is built with `@source(none)` and so contains no utility classes). Add Tailwind v4 utility classes to your HTML via the documented browser build:
-
-```html
-<script src="https://unpkg.com/@tailwindcss/browser@4"></script>
-```
-
-This generates utilities from your HTML at runtime; the library's tree-shaker then drops any basecoat component classes your HTML does not reference.
+The library ships the **basecoat component classes only** (no Tailwind utility classes). Your HTML also needs the Tailwind v4 browser script for utilities to work — see [How Tailwind is included](#how-tailwind-is-included) below.
 
 ## Features
 
@@ -23,6 +17,12 @@ This generates utilities from your HTML at runtime; the library's tree-shaker th
 
 ## Usage
 
+The library exposes a virtual `fs.FS` that serves a single `basecoat.css`
+(basecoat component classes, tree-shaken against your HTML) and a single
+`basecoat.js` (embedded basecoat runtime + your `js/*.js` files, minified).
+You still need to add the Tailwind v4 browser script to your HTML
+yourself so utility classes work — see [How Tailwind is included](#how-tailwind-is-included) below.
+
 ```go
 import (
     "errors"
@@ -33,14 +33,15 @@ import (
 )
 
 func main() {
-    // Optional: pin a basecoat version to download CSS assets.
-    // basecoat.BasecoatVersion = "^0.3.11"
+    // Pin a basecoat version so Init downloads and caches basecoat.cdn.min.css
+    // on first run. Leave empty to serve only your local assets (no component
+    // classes, no Tailwind utilities).
+    basecoat.BasecoatVersion = "^0.3.11"
 
     // Disable file watching in production.
     // basecoat.Static = true
 
     ufs, err := basecoat.Init("./cache",
-        basecoat.Dir("./components"),
         basecoat.Dir("./public"),
     )
     if errors.Is(err, basecoat.ErrUpdateAvailable) {
@@ -53,6 +54,44 @@ func main() {
     log.Fatal(http.ListenAndServe(":8080", http.FileServer(http.FS(ufs))))
 }
 ```
+
+Your `public/index.html` then loads the two stylesheets/scripts side by side:
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>my app</title>
+<link rel="stylesheet" href="/basecoat.css">                              <!-- basecoat component classes, tree-shaken -->
+<script src="https://unpkg.com/@tailwindcss/browser@4"></script>          <!-- Tailwind v4 utilities, generated from your HTML at runtime -->
+</head>
+<body>
+<!-- your markup here -->
+</body>
+</html>
+```
+
+## How Tailwind is included
+
+The library downloads `basecoat.cdn.min.css` from unpkg, which is built
+with `@source(none)` and so contains only the basecoat component classes
+(`.btn`, `.card`, `.input`, `.select`, `.popover`, `.toast`, etc.) — no
+generic utility classes. The pre-compiled Tailwind v4 build is not
+published to any public CDN, and Tailwind v4's npm package only ships
+source fragments that need `npx tailwindcss` to compile.
+
+The supported path is the official Tailwind v4 browser build
+(`@tailwindcss/browser@4`), which is a JS bundle that processes your
+HTML at runtime and generates utility classes as it sees them. This
+gives you the full Tailwind v4 utility set (`flex`, `gap-4`, `p-4`,
+`text-muted-foreground`, etc.) without any build step or Go-side
+compilation.
+
+The trade-off: Tailwind processing happens in the browser (small first-paint
+cost), and you depend on a CDN at runtime. If you want a fully
+self-contained CSS with no CDN dependency, you'd need to run Tailwind
+locally and commit the output — out of scope for this library.
 
 ## Directory layout
 
@@ -88,16 +127,20 @@ window.basecoat.stop()
 User JS files should call `basecoat.register()` to define components:
 
 ```js
-basecoat.register('todo', '#todo-app:not([data-todo-initialized])', function(el) {
+basecoat.register('chat', '#my-chat:not([data-chat-initialized])', function(el) {
   // el is the matching DOM node
+  el.addEventListener('submit', function(e) { /* ... */ });
+  el.dataset.chatInitialized = '';
+  el.dispatchEvent(new CustomEvent('basecoat:initialized'));
 })
 
+// later calls override earlier ones with the same name
 basecoat.register('dropdown-menu', '.dropdown-menu:not([data-dropdown-menu-initialized])', function(el) {
-  // override built-in component
+  // override the built-in dropdown-menu
 })
 ```
 
-After an `innerHTML` swap, re-initialise with:
+After an `innerHTML` swap (e.g. htmx fragment), re-initialise everything:
 
 ```js
 basecoat.initAll()
