@@ -146,6 +146,41 @@ After an `innerHTML` swap (e.g. htmx fragment), re-initialise everything:
 basecoat.initAll()
 ```
 
+## Hot-swap sources
+
+For setups where the source set isn't known at construction time
+(parent processes that receive `fs.FS` content from child services
+over a Unix socket, plugin systems, multi-tenant hosts, etc.) the
+library exposes `AddSource`, `RemoveSource`, and `Reload` on the
+`*UnionFS`:
+
+```go
+ufs, _ := basecoat.Init("./cache")
+ufs.AddSource("child-1", childFS1)   // any fs.FS the parent built
+ufs.AddSource("child-2", childFS2)   //    from incoming socket data
+ufs.Reload()                          // explicit — caller batches
+// ... later, when child-1 disconnects:
+ufs.RemoveSource("child-1")
+ufs.Reload()
+```
+
+Semantics:
+
+- `AddSource` does **not** auto-reload. The caller batches multiple
+  add/remove operations and calls `Reload` once. The right shape for
+  a parent handling bursts of connections.
+- `RemoveSource` returns `false` for unknown names and is otherwise a
+  no-op on the rest of the list. Order of remaining sources is
+  preserved — first-match-wins across `Open()` calls is unchanged.
+- Sources added via `AddSource` are **not** watched by the poll
+  watcher (the watcher was started with the initial sources only).
+  The parent is responsible for triggering `Reload` on external
+  changes for `AddSource`'d entries. In a `Static = true` deployment
+  the parent owns all reload signals.
+- `Reload` is concurrency-safe and re-entrant from the poll watcher
+  callback. `Open()` always sees the previous or next version, never
+  a half-built one.
+
 ## CLI
 
 The module ships with a command-line tool that generates `basecoat.css` and `basecoat.js` without running a server — useful for build pipelines and CI.

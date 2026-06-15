@@ -66,18 +66,22 @@ func Dir(root string) fs.FS {
 // sources is a list of fs.FS values — use basecoat.Dir() for any that
 // should trigger regeneration on file changes.
 func Init(cacheDir string, sources ...fs.FS) (*UnionFS, error) {
-	var srcs []sourceFS
-	for _, s := range sources {
-		sf := sourceFS{fs: s}
-		if root, ok := watchable.Load(s); ok {
-			sf.root = root.(string)
+	srcs := make([]sourceFS, 0, len(sources))
+	srcIdx := make(map[string]int, len(sources))
+	for i, s := range sources {
+		name := fmt.Sprintf("init-%d", i)
+		sf := sourceFS{name: name, fs: s}
+		if root, ok := watchableRoot(s); ok {
+			sf.root = root
 			sf.ws = newWatchSource(sf.root)
 		}
 		srcs = append(srcs, sf)
+		srcIdx[name] = i
 	}
 
 	u := &UnionFS{
 		sources:    srcs,
+		sourceIdx:  srcIdx,
 		cachePath:  cacheDir,
 		static:     Static,
 		embeddedJS: basecoatUI_v0311,
@@ -110,7 +114,7 @@ func Init(cacheDir string, sources ...fs.FS) (*UnionFS, error) {
 		}
 	}
 
-	u.regenerate()
+	u.Reload()
 
 	if !Static {
 		var watchSources []*watchSource
@@ -120,7 +124,7 @@ func Init(cacheDir string, sources ...fs.FS) (*UnionFS, error) {
 			}
 		}
 		if len(watchSources) > 0 {
-			u.watcher = startPollWatcher(watchSources, u.regenerate)
+			u.watcher = startPollWatcher(watchSources, u.Reload)
 		}
 	}
 

@@ -81,12 +81,16 @@ When you change behaviour, these are the symbols callers depend on:
 - `basecoat.Init(cacheDir string, sources ...fs.FS) (*UnionFS, error)`
 - `basecoat.Dir(root string) fs.FS` — registers the path with the poll watcher
 - `(*UnionFS).Open(name string) (fs.File, error)` — must keep satisfying `fs.FS`
+- `(*UnionFS).AddSource(name string, src fs.FS)` — hot-add a source at runtime
+- `(*UnionFS).RemoveSource(name string) bool` — hot-remove a source; returns false if no such name
+- `(*UnionFS).Reload()` — rebuild `basecoat.css` and `basecoat.js` from the current set of sources (replaces the old unexported `regenerate`)
 - `(*UnionFS).Close() error`
 - Package vars: `BasecoatVersion`, `Static`, `AutoUpdate`
 - Sentinel: `ErrUpdateAvailable` (use `errors.Is`)
 
 Internal but worth knowing: `sourceFS`, `virtualFile`, `virtualDir`,
-`pollWatcher`, `watchSource`, `resolvedVersion`, `versionEntry`.
+`pollWatcher`, `watchSource`, `resolvedVersion`, `versionEntry`,
+`watchableRoot`.
 
 ## Conventions
 
@@ -141,6 +145,40 @@ built-in components.
 cd example
 go run ../cmd/basecoat --source ./public --source ./elements --output ./dist
 ```
+
+### Hot-swap sources at runtime
+
+Designed for parent services that host child modules over a Unix
+socket (or any setup where the set of sources is not known at `Init`
+time). Sources are added/removed by name; `Reload` rebuilds the
+virtual CSS/JS:
+
+```go
+ufs, _ := basecoat.Init("./cache")           // no sources yet, or pass some
+ufs.AddSource("child-1", childFS1)           // childFS1 is any fs.FS the parent
+                                              // built from incoming socket data
+ufs.AddSource("child-2", childFS2)
+ufs.Reload()                                 // explicit — caller batches
+// ... later, when child-1 disconnects:
+ufs.RemoveSource("child-1")
+ufs.Reload()
+```
+
+Semantics worth knowing:
+
+- `AddSource` does not auto-reload. The caller batches multiple
+  add/remove operations and calls `Reload` once. This is the right
+  shape for a parent that handles bursts of child connections.
+- `RemoveSource` returns `false` for unknown names; the source list
+  is otherwise unchanged. Order of remaining sources is preserved
+  (first-match-wins across `Open` calls is unchanged).
+- Sources added via `AddSource` are **not** watched by the poll
+  watcher — the watcher was started with the initial sources only.
+  The parent is responsible for triggering `Reload` on external
+  changes for `AddSource`'d entries.
+- `Reload` is concurrency-safe and re-entrant from the poll watcher
+  callback. `Open` always sees the previous or next version, never a
+  half-built one.
 
 ## Gotchas
 

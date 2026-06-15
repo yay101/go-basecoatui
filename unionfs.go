@@ -23,9 +23,14 @@ var _ fs.FS = (*UnionFS)(nil)
 //
 // Non-virtual paths are resolved by searching sources in order and
 // returning the first match (classic overlay behaviour).
+//
+// Sources can be added at construction time (via Init) or at runtime
+// (via AddSource / RemoveSource). After mutating the source set the
+// caller must invoke Reload to regenerate the virtual CSS/JS.
 type UnionFS struct {
 	mu           sync.RWMutex
 	sources      []sourceFS
+	sourceIdx    map[string]int
 	cssData      []byte
 	jsData       []byte
 	cachePath    string
@@ -51,7 +56,10 @@ func (u *UnionFS) Open(name string) (fs.File, error) {
 		u.mu.RUnlock()
 		return newVirtualFile("basecoat.js", data), nil
 	}
-	for _, src := range u.sources {
+	u.mu.RLock()
+	sources := u.sources
+	u.mu.RUnlock()
+	for _, src := range sources {
 		f, err := src.fs.Open(name)
 		if err == nil {
 			return f, nil
@@ -66,8 +74,12 @@ func (u *UnionFS) Open(name string) (fs.File, error) {
 // openRootDir builds a merged directory listing from all sources plus
 // the two virtual file entries.
 func (u *UnionFS) openRootDir() (fs.File, error) {
+	u.mu.RLock()
+	sources := u.sources
+	u.mu.RUnlock()
+
 	var entries []string
-	for _, src := range u.sources {
+	for _, src := range sources {
 		f, err := src.fs.Open(".")
 		if err != nil {
 			continue
@@ -92,16 +104,75 @@ func (u *UnionFS) openRootDir() (fs.File, error) {
 	return &virtualDir{entries: dirs}, nil
 }
 
-// regenerate re-scans all sources and rebuilds basecoat.css and basecoat.js.
-// It is called once during Init and then whenever the poll watcher detects
-// a file change. The result is swapped atomically under a write lock.
-func (u *UnionFS) regenerate() {
-	used := extractUsedClasses(u.sources)
-	css, err := generateCSS(u.sources, u.basecoatPath, used)
+// AddSource registers src under name, replacing any existing source with
+// the same name. Order of registration is preserved for first-match-wins
+// semantics across Open() calls. Does not auto-reload — call Reload when
+// the set of sources has settled.
+//
+// If src was returned by Dir() the underlying root path is tracked so
+// future version-table work can find it, but the poll watcher (if any)
+// is not retroactively rewired: the watcher was started with the
+// initial sources only. The parent is responsible for triggering Reload
+// on external changes for AddSource'd entries.
+func (u *UnionFS) AddSource(name string, src fs.FS) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	sf := sourceFS{name: name, fs: src}
+	if root, ok := watchableRoot(src); ok {
+		sf.root = root
+		sf.ws = newWatchSource(sf.root)
+	}
+
+	if i, exists := u.sourceIdx[name]; exists {
+		u.sources[i] = sf
+		return
+	}
+
+	u.sources = append(u.sources, sf)
+	if u.sourceIdx == nil {
+		u.sourceIdx = make(map[string]int)
+	}
+	u.sourceIdx[name] = len(u.sources) - 1
+}
+
+// RemoveSource drops the source with the given name. Returns false if
+// no such source was registered. Does not auto-reload — call Reload
+// to regenerate basecoat.css and basecoat.js without the removed
+// source. Order of the remaining sources is preserved.
+func (u *UnionFS) RemoveSource(name string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	i, ok := u.sourceIdx[name]
+	if !ok {
+		return false
+	}
+
+	u.sources = append(u.sources[:i], u.sources[i+1:]...)
+	delete(u.sourceIdx, name)
+	for j := i; j < len(u.sources); j++ {
+		u.sourceIdx[u.sources[j].name] = j
+	}
+	return true
+}
+
+// Reload rebuilds basecoat.css and basecoat.js from the current set of
+// sources. Atomic with respect to Open() — readers see the previous or
+// next version, never a half-built one. Safe to call concurrently and
+// safe to call from inside the poll watcher callback.
+func (u *UnionFS) Reload() {
+	u.mu.RLock()
+	sources := make([]sourceFS, len(u.sources))
+	copy(sources, u.sources)
+	u.mu.RUnlock()
+
+	used := extractUsedClasses(sources)
+	css, err := generateCSS(sources, u.basecoatPath, used)
 	if err != nil {
 		return
 	}
-	js, err := generateJS(u.sources, u.embeddedJS)
+	js, err := generateJS(sources, u.embeddedJS)
 	if err != nil {
 		return
 	}
@@ -239,8 +310,25 @@ func unique(s []string) []string {
 	return out
 }
 
-// sourceFS pairs an fs.FS with an optional filesystem root and poll watcher.
+// watchableRoot looks up the filesystem root path for src in the
+// global watchable map (populated by Dir). Returns ("", false) if src
+// was not registered via Dir or if src is a type that can't be used
+// as a sync.Map key (e.g. fstest.MapFS, which is a Go map). The
+// recover guards the latter: sync.Map.Load hashes the key, which
+// panics on non-comparable types.
+func watchableRoot(src fs.FS) (string, bool) {
+	defer func() { _ = recover() }()
+	root, ok := watchable.Load(src)
+	if !ok {
+		return "", false
+	}
+	return root.(string), true
+}
+
+// sourceFS pairs an fs.FS with a name, an optional filesystem root,
+// and an optional poll watcher.
 type sourceFS struct {
+	name string
 	fs   fs.FS
 	root string
 	ws   *watchSource
