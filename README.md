@@ -93,24 +93,45 @@ cost), and you depend on a CDN at runtime. If you want a fully
 self-contained CSS with no CDN dependency, you'd need to run Tailwind
 locally and commit the output — out of scope for this library.
 
-## Directory layout
+## File inclusion rules
 
-Place your component files in directories that you pass as sources:
+There is no required folder structure — the library picks files up by
+extension (and two fixed subdirectory names for CSS/JS). You can pass
+any number of source directories to `Init` (or `--source` to the CLI)
+and arrange them however you like:
+
+| File pattern | What it does |
+|---|---|
+| `**/*.html` (anywhere, recursive) | Scanned for class names used in the tree-shaker |
+| `css/*.css` (top level of each source) | Concatenated into `basecoat.css` and tree-shaken |
+| `js/*.js` (top level of each source) | Appended to `basecoat.js` after the embedded runtime |
+
+Everything else in a source is ignored at generation time — it still
+passes through as a regular file served by `http.FileServer` because
+`UnionFS` is a layered `fs.FS`.
+
+A typical layout:
 
 ```
 my-project/
 ├── public/
-│   └── index.html              <!-- scanned for class tree-shaking -->
+│   ├── index.html
+│   └── about.html                <!-- also scanned for class names -->
 └── components/
     ├── css/
-    │   ├── button.css           <!-- merged into basecoat.css -->
+    │   ├── button.css             <!-- merged into basecoat.css -->
     │   └── card.css
     └── js/
-        ├── onClick.js           <!-- runs basecoat.register(...) -->
-        └── todo.js              <!-- appended to basecoat.js -->
+        ├── onClick.js             <!-- appended to basecoat.js -->
+        └── todo.js
 ```
 
-The generated `basecoat.css` is the concatenation of downloaded basecoat CSS and every `components/**/css/*.css` file — tree-shaken and minified. The generated `basecoat.js` is the embedded basecoat runtime plus every `components/**/js/*.js` file — minified.
+Both `public/` and `components/` are passed to `Init`; the library
+doesn't care that one is HTML-only and the other is CSS+JS. The
+generated `basecoat.css` is the concatenation of the downloaded
+basecoat CSS plus every `css/*.css` across all sources — tree-shaken
+and minified. The generated `basecoat.js` is the embedded basecoat
+runtime plus every `js/*.js` across all sources — minified.
 
 ## Component JS
 
