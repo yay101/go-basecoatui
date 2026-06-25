@@ -4,3 +4,5 @@ example/cache/
 example/.basecoat-cache/
 dist/
 example/dist/
+basecoat
+cmd/basecoat/basecoat
