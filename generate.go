@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -18,10 +19,11 @@ var (
 // generateCSS builds the basecoat.css string by concatenating:
 //   - downloaded basecoat CSS (tree-shaken) — already includes the Tailwind
 //     v4 preflight and theme layer
-//   - all /css/*.css files from every source (tree-shaken)
+//   - all /basecoat/css/**/*.css files from every source and asset source
+//     (tree-shaken against the used set)
 //
 // Every chunk is tree-shaken against the used set and the result is minified.
-func generateCSS(sources []sourceFS, basecoatPath string, used map[string]bool) (string, error) {
+func generateCSS(sources, assetSources []sourceFS, basecoatPath string, used map[string]bool) (string, error) {
 	var parts []string
 
 	if basecoatPath != "" {
@@ -30,12 +32,8 @@ func generateCSS(sources []sourceFS, basecoatPath string, used map[string]bool) 
 			parts = append(parts, treeShakeCSS(string(data), used))
 		}
 	}
-	for _, src := range sources {
-		cssFiles, err := fs.Glob(src.fs, "css/*.css")
-		if err != nil {
-			continue
-		}
-		for _, name := range cssFiles {
+	for _, src := range append(sources, assetSources...) {
+		for _, name := range walkExt(src.fs, "basecoat/css", ".css") {
 			f, err := src.fs.Open(name)
 			if err != nil {
 				continue
@@ -53,13 +51,14 @@ func generateCSS(sources []sourceFS, basecoatPath string, used map[string]bool) 
 	return minifyCSS(combined), nil
 }
 
-// extractUsedClasses walks every .html file in all source filesystems
+// extractUsedClasses walks every .html file in all source and asset
+// source filesystems (including template fragments under basecoat/html/)
 // and collects every class name that appears in a class="..." attribute.
 // The returned set always includes "*", "html", "body", and ":root" so
 // that universal and type selectors are never stripped.
-func extractUsedClasses(sources []sourceFS) map[string]bool {
+func extractUsedClasses(sources, assetSources []sourceFS) map[string]bool {
 	used := map[string]bool{"*": true, "html": true, "body": true, ":root": true}
-	for _, src := range sources {
+	for _, src := range append(sources, assetSources...) {
 		fs.WalkDir(src.fs, ".", func(p string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".html") {
 				return err
@@ -167,22 +166,19 @@ func extractClassesFromSelector(sel string) []string {
 
 // generateJS builds the basecoat.js string by concatenating the embedded
 // basecoat runtime (which registers the window.basecoat API and all built-in
-// components) followed by every /js/*.js file from every source directory.
-// User files can call basecoat.register(...) to add new components or
-// override built-in ones — the registry uses assignment so later calls win.
-func generateJS(sources []sourceFS, embeddedJS []byte) (string, error) {
+// components) followed by every /basecoat/js/**/*.js file from every source
+// and asset source directory. User files can call basecoat.register(...) to
+// add new components or override built-in ones — the registry uses assignment
+// so later calls win.
+func generateJS(sources, assetSources []sourceFS, embeddedJS []byte) (string, error) {
 	var parts []string
 
 	if len(embeddedJS) > 0 {
 		parts = append(parts, string(embeddedJS))
 	}
 
-	for _, src := range sources {
-		jsFiles, err := fs.Glob(src.fs, "js/*.js")
-		if err != nil {
-			continue
-		}
-		for _, name := range jsFiles {
+	for _, src := range append(sources, assetSources...) {
+		for _, name := range walkExt(src.fs, "basecoat/js", ".js") {
 			f, err := src.fs.Open(name)
 			if err != nil {
 				continue
@@ -197,4 +193,23 @@ func generateJS(sources []sourceFS, embeddedJS []byte) (string, error) {
 	}
 
 	return minifyJS(strings.Join(parts, "\n")), nil
+}
+
+// walkExt returns every path under root in fsys whose file name ends in
+// suffix, recursively. It returns nil if root does not exist. Paths are
+// returned in lexical order so concatenated output is deterministic
+// across runs.
+func walkExt(fsys fs.FS, root, suffix string) []string {
+	var out []string
+	fs.WalkDir(fsys, root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(p, suffix) {
+			out = append(out, p)
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out
 }

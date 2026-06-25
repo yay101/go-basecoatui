@@ -8,6 +8,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"html/template"
 	"io/fs"
 	"os"
 	"sync"
@@ -58,6 +59,62 @@ func Dir(root string) fs.FS {
 	return f
 }
 
+// FS is the union filesystem returned by Init. It satisfies the standard
+// io/fs interfaces (Open, ReadDir, Stat) plus the basecoat-specific
+// operations: regenerate the virtual CSS/JS, hot-swap sources, and parse
+// html/template files out of the source tree.
+//
+// The reserved namespace is anything matching "basecoat" or "basecoat/..."
+// (case-sensitive). UnionFS masks user content at those paths so the
+// virtual basecoat.css and basecoat.js are the only entries with a
+// "basecoat" prefix. Callers that mount this FS over HTTP should add a
+// /basecoat/ → 404 rule to make the reservation explicit at the routing
+// layer.
+type FS interface {
+	fs.FS
+	fs.ReadDirFS
+	fs.StatFS
+
+	// Reload rebuilds basecoat.css and basecoat.js from the current
+	// set of sources. See *UnionFS.Reload for the concurrency contract.
+	Reload()
+
+	// AddSource registers src under name, replacing any existing
+	// source with the same name. Does not auto-reload.
+	AddSource(name string, src fs.FS)
+
+	// AddAssetSource registers src under name as an asset-only source:
+	// its basecoat/css/**, basecoat/js/**, basecoat/html/**, and any
+	// *.html files contribute to generation (CSS/JS output, class
+	// extraction, template fragments) exactly like a full source, but
+	// the source's files are NOT served through Open/ReadDir/Stat. Use
+	// this for child services that ship their CSS/JS/fragments to a
+	// parent but serve their own pages via their own mux prefix.
+	// Replaces any existing source (full or asset) with the same name.
+	// Not poll-watched — the caller must call Reload after changes.
+	AddAssetSource(name string, src fs.FS)
+
+	// RemoveSource drops the source (full or asset) with the given
+	// name. Returns false if no such source was registered.
+	RemoveSource(name string) bool
+
+	// Template parses match as html/template files out of the union
+	// FS, with all *.html files under any source's "basecoat/html/"
+	// tree (recursive, full and asset sources alike) parsed first as
+	// fragments. The match files themselves are resolved against
+	// full sources only — asset sources are not page-renderable. The
+	// result is cached and reused until the next Reload.
+	Template(match ...string) (*template.Template, error)
+
+	// TemplateFuncs is like Template but registers funcs on the
+	// template before parsing, so fragments and pages alike can call
+	// those functions.
+	TemplateFuncs(funcs template.FuncMap, match ...string) (*template.Template, error)
+
+	// Close stops the poll watcher goroutine.
+	Close() error
+}
+
 // Init creates the union filesystem, downloads and caches remote assets
 // (if BasecoatVersion is set), generates the initial basecoat.css and
 // basecoat.js, and starts the poll watcher (unless Static is true).
@@ -65,9 +122,9 @@ func Dir(root string) fs.FS {
 // cacheDir is the local directory where downloaded CSS files are stored.
 // sources is a list of fs.FS values — use basecoat.Dir() for any that
 // should trigger regeneration on file changes.
-func Init(cacheDir string, sources ...fs.FS) (*UnionFS, error) {
+func Init(cacheDir string, sources ...fs.FS) (FS, error) {
 	srcs := make([]sourceFS, 0, len(sources))
-	srcIdx := make(map[string]int, len(sources))
+	srcIdx := make(map[string]sourceRef, len(sources))
 	for i, s := range sources {
 		name := fmt.Sprintf("init-%d", i)
 		sf := sourceFS{name: name, fs: s}
@@ -76,7 +133,7 @@ func Init(cacheDir string, sources ...fs.FS) (*UnionFS, error) {
 			sf.ws = newWatchSource(sf.root)
 		}
 		srcs = append(srcs, sf)
-		srcIdx[name] = i
+		srcIdx[name] = sourceRef{asset: false, index: len(srcs) - 1}
 	}
 
 	u := &UnionFS{

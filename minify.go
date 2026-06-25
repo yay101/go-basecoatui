@@ -13,7 +13,7 @@ var (
 
 // States for the JS string/comment scanner used by minifyJS.
 const (
-	jsNormal = iota
+	jsNormal       = iota
 	jsSQuote       // inside '...'
 	jsDQuote       // inside "..."
 	jsTemplate     // inside `...`
@@ -62,7 +62,7 @@ func minifyJS(s string) string {
 
 // stripJSComments removes // line comments and /* ... */ block comments
 // from s, leaving '...', "...", and `...` string literals untouched.
-// Backslash escapes inside strings are honoured so '\\' and '\'' do not
+// Backslash escapes inside strings are honoured so '\\' and '\” do not
 // terminate the string. Template-literal expressions (${...}) and regex
 // literals (/.../) are not specially handled.
 func stripJSComments(s string) string {

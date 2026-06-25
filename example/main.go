@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"net/http"
@@ -39,10 +41,50 @@ func main() {
 	mux.HandleFunc("POST /api/chat", handleChat)
 	mux.HandleFunc("POST /api/create-account", handleCreateAccount)
 	mux.HandleFunc("POST /api/report-issue", handleReportIssue)
+	mux.HandleFunc("GET /{$}", handleIndex(ufs))
+	// /basecoat/ is the reserved namespace — any request to it that
+	// wasn't served as the two virtual files at the root (/basecoat.css
+	// and /basecoat.js) must 404. The file server below still serves
+	// those two because their paths are at the root, not under /basecoat/.
+	mux.Handle("/basecoat/", http.NotFoundHandler())
 	mux.Handle("/", http.FileServer(http.FS(ufs)))
 
 	log.Println("listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", mux))
+}
+
+func handleIndex(ufs basecoat.FS) http.HandlerFunc {
+	funcs := template.FuncMap{
+		"dict": dict,
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		t, err := ufs.TemplateFuncs(funcs, "index.html")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := t.Execute(w, nil); err != nil {
+			log.Printf("template execute: %v", err)
+		}
+	}
+}
+
+// dict builds a map[string]any from alternating key/value pairs, for
+// use with {{template "name" dict "Key" "Val" ...}} in html/template.
+func dict(values ...any) map[string]any {
+	if len(values)%2 != 0 {
+		panic("dict: expected key/value pairs")
+	}
+	m := make(map[string]any, len(values)/2)
+	for i := 0; i < len(values); i += 2 {
+		k, ok := values[i].(string)
+		if !ok {
+			panic(fmt.Sprintf("dict: key at index %d is not a string", i))
+		}
+		m[k] = values[i+1]
+	}
+	return m
 }
 
 func readJSON(r *http.Request, out interface{}) error {

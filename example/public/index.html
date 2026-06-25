@@ -24,10 +24,7 @@
     <div class="flex flex-col gap-4">
 
       <div class="card" id="example-team">
-        <header>
-          <h2>Team Members</h2>
-          <p>Invite your team members to collaborate.</p>
-        </header>
+        {{template "card-header" dict "Title" "Team Members" "Description" "Invite your team members to collaborate."}}
         <section>
           <ul class="grid gap-4">
             <li class="flex items-center gap-4">
@@ -119,10 +116,7 @@
       </div>
 
       <div class="card" id="example-cookies">
-        <header>
-          <h2>Cookie Settings</h2>
-          <p>Manage your cookie settings here.</p>
-        </header>
+        {{template "card-header" dict "Title" "Cookie Settings" "Description" "Manage your cookie settings here."}}
         <section class="text-sm grid gap-6">
           <label class="flex items-center justify-between gap-2">
             <div class="flex flex-col gap-0.5">
@@ -152,10 +146,7 @@
       </div>
 
       <div class="card" id="example-payment">
-        <header>
-          <h2>Payment Method</h2>
-          <p>Add a new payment method to your account.</p>
-        </header>
+        {{template "card-header" dict "Title" "Payment Method" "Description" "Add a new payment method to your account."}}
         <section>
           <form class="form grid gap-6" data-payment-form>
             <ul class="flex gap-4">
@@ -277,10 +268,7 @@
       </div>
 
       <div class="card" id="example-account">
-        <header>
-          <h2>Create an account</h2>
-          <p>Enter your email below to create your account</p>
-        </header>
+        {{template "card-header" dict "Title" "Create an account" "Description" "Enter your email below to create your account"}}
         <section class="grid gap-6">
           <div class="flex gap-6">
             <button type="button" class="btn-outline flex-1" data-account-provider="github">
@@ -318,10 +306,7 @@
       </div>
 
       <div class="card" id="example-report">
-        <header>
-          <h2>Report an issue</h2>
-          <p>What area are you having problems with?</p>
-        </header>
+        {{template "card-header" dict "Title" "Report an issue" "Description" "What area are you having problems with?"}}
         <section>
           <form class="form grid gap-6" data-report-form>
             <div class="flex gap-4">
