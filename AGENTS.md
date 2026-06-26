@@ -79,7 +79,7 @@ go run ./cmd/basecoat --mode=child \
 
 | File | Responsibility |
 |---|---|
-| `basecoat.go` | Package entry. `FS` interface, `Init` (parent), `InitChild`, `Dir()`, `Static` config, `//go:embed` basecoat runtime fallback. |
+| `basecoat.go` | Package entry. `FS` interface, `Init` (parent), `InitChild`, `Watch()`, `Mask()`, `Static` config, `//go:embed` basecoat runtime fallback. |
 | `unionfs.go` | `UnionFS` (`fs.FS` + `fs.ReadDirFS` + `fs.StatFS` impl), virtual file/dir types, `Reload` (atomic swap under write lock), `ReadDir`/`Stat`, `basecoat/` namespace masking, `snapshotSources` helper, `Close()`. |
 | `watcher.go` | `watchSource` (mod-time map), 2-second `pollWatcher` goroutine. |
 | `download.go` | `downloadFile`, `ensureBasecoatStyles` (download-once), `ensureBasecoatJS` (always-download with embedded fallback). |
@@ -96,7 +96,7 @@ When you change behaviour, these are the symbols callers depend on:
 - `basecoat.Init(cacheDir string, sources ...fs.FS) (FS, error)` — parent mode: downloads styles.css + jsdelivr basecoat.js, embeds the runtime into basecoat.js
 - `basecoat.InitChild(sources ...fs.FS) (FS, error)` — child mode: no network, no embedded runtime, just user content
 - `basecoat.FS` interface — embeds `fs.FS`, `fs.ReadDirFS`, `fs.StatFS` plus `Reload`, `AddSource`, `RemoveSource`, `Close`
-- `basecoat.Dir(root string) fs.FS` — registers the path with the poll watcher
+- `basecoat.Watch(root string) fs.FS` — registers the path with the poll watcher
 - `(FS).Open(name string) (fs.File, error)` — must keep satisfying `fs.FS`; masks `basecoat/...` paths
 - `(FS).ReadDir(name string) ([]fs.DirEntry, error)` — merged listing; masks `basecoat` and `basecoat/...`
 - `(FS).Stat(name string) (fs.FileInfo, error)` — masks `basecoat/...`
@@ -142,7 +142,7 @@ Internal but worth knowing: `sourceFS`, `sourceRef`, `virtualFile`,
 
 ## Source layout
 
-Every source passed to `Init` / `InitChild` (or `Dir`) follows the
+Every source passed to `Init` / `InitChild` (or `Watch`) follows the
 same convention. The `basecoat/` subdirectory is reserved for
 library-managed assets; everything else is served verbatim through the
 union FS.
@@ -176,7 +176,7 @@ raw source FS during generation, so the mask doesn't apply there.
 
 ### Add a user component
 
-Place files under any source directory passed to `Dir()`, inside the
+Place files under any source directory passed to `Watch()`, inside the
 reserved `basecoat/` subtree:
 
 ```
@@ -196,7 +196,7 @@ The library no longer owns `html/template`. Callers parse their HTML
 themselves with `template.ParseFS(ufs, globs...)` against the union FS:
 
 ```go
-ufs, _ := basecoat.Init("./cache", basecoat.Dir("./public"))
+ufs, _ := basecoat.Init("./cache", basecoat.Watch("./public"))
 
 t, err := template.ParseFS(ufs, "**/*.html")
 if err != nil { /* ... */ }

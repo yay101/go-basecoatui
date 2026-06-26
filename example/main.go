@@ -32,8 +32,8 @@ func main() {
 	// the library masks out of the union FS so they never appear at a
 	// URL. To still pick them up via template.ParseFS we walk the raw
 	// source instead.
-	publicFS := basecoat.Dir("./public")
-	elementsFS := basecoat.Dir("./elements")
+	publicFS := basecoat.Watch("./public")
+	elementsFS := basecoat.Watch("./elements")
 	ufs, err := basecoat.Init("./cache", publicFS, elementsFS)
 	if err != nil {
 		log.Fatal(err)

@@ -40,7 +40,7 @@ func main() {
 
 	var fses []fs.FS
 	for _, s := range sources {
-		fses = append(fses, basecoat.Dir(s))
+		fses = append(fses, basecoat.Watch(s))
 	}
 
 	var (

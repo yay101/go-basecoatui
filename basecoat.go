@@ -31,7 +31,7 @@ import (
 //go:embed basecoatui/v0.3.11/basecoat.js
 var embeddedBasecoatJS []byte
 
-// watchable maps fs.FS values returned by Dir() back to their
+// watchable maps fs.FS values returned by Watch() back to their
 // filesystem root paths, so Init can set up polling on them.
 var watchable sync.Map
 
@@ -39,10 +39,10 @@ var watchable sync.Map
 // during Init and never again. Use in production.
 var Static bool
 
-// Dir wraps root in an io/fs.FS and registers it with the poll-based
-// watcher. Use Dir when you want Init to auto-detect file changes in
+// Watch wraps root in an io/fs.FS and registers it with the poll-based
+// watcher. Use Watch when you want Init to auto-detect file changes in
 // a directory and regenerate basecoat.css / basecoat.js.
-func Dir(root string) fs.FS {
+func Watch(root string) fs.FS {
 	f := os.DirFS(root)
 	watchable.Store(f, root)
 	return f
@@ -90,10 +90,10 @@ type FS interface {
 // //go:embed byte slice is used as a fallback when the network is
 // down). basecoat.css = styles + user basecoat/css/**/*.css.
 // basecoat.js = runtime + user basecoat/js/**/*.js. Starts a poll
-// watcher for sources passed via Dir() unless Static is true.
+// watcher for sources passed via Watch() unless Static is true.
 //
 // cacheDir is the local directory where downloaded assets are stored.
-// sources is a list of fs.FS values — use basecoat.Dir() for any that
+// sources is a list of fs.FS values — use basecoat.Watch() for any that
 // should trigger regeneration on file changes.
 func Init(cacheDir string, sources ...fs.FS) (FS, error) {
 	stylesPath, err := ensureBasecoatStyles(cacheDir)
@@ -124,7 +124,7 @@ func Init(cacheDir string, sources ...fs.FS) (FS, error) {
 // basecoat.js = user basecoat/js/**/*.js only (no embedded runtime —
 // the parent has already loaded it, and the child's JS uses
 // basecoat.register() to add its components to the global registry on
-// page load). Starts a poll watcher for sources passed via Dir()
+// page load). Starts a poll watcher for sources passed via Watch()
 // unless Static is true.
 func InitChild(sources ...fs.FS) (FS, error) {
 	u := newUnionFS(sources, "", "", nil, "")

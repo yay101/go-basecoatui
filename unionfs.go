@@ -328,7 +328,7 @@ func (u *UnionFS) Stat(name string) (fs.FileInfo, error) {
 // across Open() calls. Does not auto-reload — call Reload when the set
 // of sources has settled.
 //
-// If src was returned by Dir() the underlying root path is tracked so
+// If src was returned by Watch() the underlying root path is tracked so
 // the poll watcher can poll it, but the poll watcher (if any) is not
 // retroactively rewired: the watcher was started with the initial
 // sources only. The parent is responsible for triggering Reload on
@@ -424,7 +424,7 @@ func (u *UnionFS) Reload() {
 }
 
 // startWatcher wires up the 2-second poll watcher for any sources
-// passed via Dir(). AddSource'd sources are not retroactively watched
+// passed via Watch(). AddSource'd sources are not retroactively watched
 // — the caller is responsible for triggering Reload for them. Safe to
 // call multiple times; later calls are no-ops.
 func (u *UnionFS) startWatcher() {
@@ -582,8 +582,8 @@ func (e dirEntry) Info() (fs.FileInfo, error) {
 }
 
 // watchableRoot looks up the filesystem root path for src in the
-// global watchable map (populated by Dir). Returns ("", false) if src
-// was not registered via Dir or if src is a type that can't be used
+// global watchable map (populated by Watch). Returns ("", false) if src
+// was not registered via Watch or if src is a type that can't be used
 // as a sync.Map key (e.g. fstest.MapFS, which is a Go map). The
 // recover guards the latter: sync.Map.Load hashes the key, which
 // panics on non-comparable types.
