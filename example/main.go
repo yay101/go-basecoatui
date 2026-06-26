@@ -2,12 +2,12 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"log"
 	"net/http"
+	"sync"
 
 	basecoat "github.com/yay101/go-basecoatui"
 )
@@ -19,17 +19,16 @@ type apiResponse struct {
 }
 
 func main() {
-	basecoat.AutoUpdate = false
 	basecoat.Static = false
-	basecoat.BasecoatVersion = "^0.3.11"
-
+	// Parent mode: downloads the prebuilt basecoat styles from
+	// basecoatui.com and the latest basecoat.js runtime from jsdelivr.
+	// basecoat.css already includes the Tailwind v4 preflight and
+	// theme layer, so no Tailwind browser script is needed.
 	ufs, err := basecoat.Init("./cache",
 		basecoat.Dir("./public"),
 		basecoat.Dir("./elements"),
 	)
-	if errors.Is(err, basecoat.ErrUpdateAvailable) {
-		log.Println("update available:", err)
-	} else if err != nil {
+	if err != nil {
 		log.Fatal(err)
 	}
 	defer ufs.Close()
@@ -53,16 +52,37 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", mux))
 }
 
+// handleIndex renders the SPA shell via template.ParseFS. The library
+// no longer owns html/template parsing — callers glob the FS for HTML
+// files and parse them themselves. The result is cached behind a
+// sync.Once and invalidated by the next Reload (which the poll
+// watcher triggers on file changes).
 func handleIndex(ufs basecoat.FS) http.HandlerFunc {
+	var (
+		once     sync.Once
+		parsed   *template.Template
+		parseErr error
+	)
+	load := func() {
+		parsed, parseErr = template.ParseFS(ufs, "**/*.html")
+	}
 	funcs := template.FuncMap{
 		"dict": dict,
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		t, err := ufs.TemplateFuncs(funcs, "index.html")
+		once.Do(load)
+		if parseErr != nil {
+			http.Error(w, parseErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		// t.Clone gives us a fresh template with funcs registered
+		// without re-parsing the underlying files.
+		t, err := parsed.Clone()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		t = t.Funcs(funcs)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := t.Execute(w, nil); err != nil {
 			log.Printf("template execute: %v", err)

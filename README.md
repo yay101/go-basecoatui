@@ -1,40 +1,34 @@
 # go-basecoatui
 
-Zero-dependency Go module that provides a virtual filesystem combining downloaded [Basecoat](https://basecoatui.com) CSS with user-provided component directories. Produces a single minified, tree-shaken `basecoat.css` and `basecoat.js`, and automatically regenerates them when source files change.
+Zero-dependency Go module that provides a virtual filesystem combining downloaded [Basecoat](https://basecoatui.com) CSS with user-provided component directories. Produces a single minified `basecoat.css` and `basecoat.js`, and automatically regenerates them when source files change.
 
-The library ships the **basecoat component classes only** (no Tailwind utility classes). Your HTML also needs the Tailwind v4 browser script for utilities to work — see [How Tailwind is included](#how-tailwind-is-included) below.
+The library ships the **complete basecoat + Tailwind v4 bundle** (component classes and utility classes) — no separate Tailwind browser script needed. Your `index.html` just loads `basecoat.css` and `basecoat.js` and you're done.
 
 ## Features
 
 - **UnionFS** — implements `io/fs.FS`, `fs.ReadDirFS`, and `fs.StatFS`; layers multiple source directories; injects virtual `basecoat.css` and `basecoat.js`
-- **Tree-shaking** — scans `.html` files for used class names, drops unused CSS rules
 - **Minification** — strips comments and whitespace from CSS and JS
-- **Version pinning** — built-in version table maps basecoat releases to download URLs; semver constraints like `^0.3.11` resolve to a concrete CSS file
-- **Auto-download** — fetches and caches `basecoat.cdn.min.css` (component classes only) on first init
-- **Component JS** — embedded basecoat runtime (`window.basecoat.register(...)`) plus user-provided `basecoat/js/**/*.js` files; later `register()` calls override earlier ones
-- **html/template** — `Template()` / `TemplateFuncs()` parse page templates out of the union FS and auto-load every `basecoat/html/**/*.html` as a fragment (results cached, invalidated by `Reload`); `SourceTemplate()` / `SourceTemplateFuncs()` scope the same machinery to a single source so each source can have its own fragment namespace
+- **Two init modes** — `Init` (parent: downloads the basecoat shell) and `InitChild` (no network, just user content for SPA sub-apps)
 - **Live reload** — 2-second poll watcher regenerates on file changes (disable with `Static` mode for production)
-- **Auto-update notification** — optional check for newer basecoat versions, returns a sentinel error you can catch and log
+- **Hot-swap sources** — `AddSource` / `RemoveSource` / `Reload` for parents that host child modules over a socket
+- **Templates via stdlib** — call `template.ParseFS(ufs, globs...)` yourself; the library doesn't own `html/template`
 - **Reserved namespace** — `basecoat/...` is masked at the FS layer so user files never leak into the `/basecoat*` URL space
 
 ## Usage
 
 The library exposes a virtual `fs.FS` that serves a single `basecoat.css`
-(basecoat component classes, tree-shaken against your HTML) and a single
-`basecoat.js` (embedded basecoat runtime + your `basecoat/js/**/*.js`
-files, minified). You still need to add the Tailwind v4 browser script
-to your HTML yourself so utility classes work — see
-[How Tailwind is included](#how-tailwind-is-included) below.
+(complete basecoat + tailwind bundle, with your user CSS appended) and
+a single `basecoat.js` (basecoat runtime + your `basecoat/js/**/*.js`
+files, minified). You parse HTML yourself with
+`template.ParseFS(ufs, globs...)`.
 
 `Init` returns a `basecoat.FS` interface that embeds `fs.FS`,
 `fs.ReadDirFS`, and `fs.StatFS` plus the basecoat-specific operations
-(`Reload`, `AddSource`, `RemoveSource`, `Template`, `TemplateFuncs`,
-`SourceTemplate`, `SourceTemplateFuncs`,
-`Close`). It drops straight into `http.FileServer(http.FS(ufs))`.
+(`Reload`, `AddSource`, `RemoveSource`, `Close`). It drops straight into
+`http.FileServer(http.FS(ufs))`.
 
 ```go
 import (
-    "errors"
     "log"
     "net/http"
 
@@ -42,35 +36,29 @@ import (
 )
 
 func main() {
-    // Pin a basecoat version so Init downloads and caches basecoat.cdn.min.css
-    // on first run. Leave empty to serve only your local assets (no component
-    // classes, no Tailwind utilities).
-    basecoat.BasecoatVersion = "^0.3.11"
-
-    // Disable file watching in production.
-    // basecoat.Static = true
-
+    // Parent mode: downloads the prebuilt basecoat styles from
+    // basecoatui.com and the latest basecoat.js runtime from jsdelivr.
     ufs, err := basecoat.Init("./cache",
         basecoat.Dir("./public"),
         basecoat.Dir("./components"),
     )
-    if errors.Is(err, basecoat.ErrUpdateAvailable) {
-        log.Println("update available:", err) // still usable
-    } else if err != nil {
+    if err != nil {
         log.Fatal(err)
     }
     defer ufs.Close()
 
     mux := http.NewServeMux()
     mux.Handle("/", http.FileServer(http.FS(ufs)))
-    // /basecoat/ is reserved — anything that isn't the two virtual files
-    // at the root (/basecoat.css, /basecoat.js) 404s explicitly.
+    // /basecoat/ is reserved — anything that isn't the two virtual
+    // files at the root (/basecoat.css, /basecoat.js) 404s explicitly.
     mux.Handle("/basecoat/", http.NotFoundHandler())
     log.Fatal(http.ListenAndServe(":8080", mux))
 }
 ```
 
-Your `public/index.html` then loads the two stylesheets/scripts side by side:
+Your `public/index.html` just loads the two bundles and is done — the
+`basecoat.css` from basecoatui.com already includes the Tailwind v4
+preflight and theme layer:
 
 ```html
 <!doctype html>
@@ -78,8 +66,7 @@ Your `public/index.html` then loads the two stylesheets/scripts side by side:
 <head>
 <meta charset="utf-8">
 <title>my app</title>
-<link rel="stylesheet" href="/basecoat.css">                              <!-- basecoat component classes, tree-shaken -->
-<script src="https://unpkg.com/@tailwindcss/browser@4"></script>          <!-- Tailwind v4 utilities, generated from your HTML at runtime -->
+<link rel="stylesheet" href="/basecoat.css">
 </head>
 <body>
 <!-- your markup here -->
@@ -87,40 +74,43 @@ Your `public/index.html` then loads the two stylesheets/scripts side by side:
 </html>
 ```
 
-## How Tailwind is included
+## How the CSS and JS are built
 
-The library downloads `basecoat.cdn.min.css` from unpkg, which is built
-with `@source(none)` and so contains only the basecoat component classes
-(`.btn`, `.card`, `.input`, `.select`, `.popover`, `.toast`, etc.) — no
-generic utility classes. The pre-compiled Tailwind v4 build is not
-published to any public CDN, and Tailwind v4's npm package only ships
-source fragments that need `npx tailwindcss` to compile.
+`basecoat.css` is the concatenation of:
+1. The prebuilt `https://basecoatui.com/assets/styles.css` (downloaded
+   once on first `Init`, cached at `{cacheDir}/basecoat/styles.css`,
+   never refreshed). This is the complete basecoat + Tailwind v4 bundle
+   — component classes *and* utility classes.
+2. Every `basecoat/css/**/*.css` across your sources, in source order,
+   recursively. Concatenated and minified.
 
-The supported path is the official Tailwind v4 browser build
-(`@tailwindcss/browser@4`), which is a JS bundle that processes your
-HTML at runtime and generates utility classes as it sees them. This
-gives you the full Tailwind v4 utility set (`flex`, `gap-4`, `p-4`,
-`text-muted-foreground`, etc.) without any build step or Go-side
-compilation.
+`basecoat.js` is the concatenation of:
+1. The basecoat.js runtime fetched from
+   `https://cdn.jsdelivr.net/npm/basecoat-css/dist/js/all.min.js` (the
+   URL is unpinned, so jsdelivr serves the latest published version
+   on every `Init`). The `//go:embed`d runtime in
+   `basecoatui/v0.3.11/basecoat.js` is used as a fallback when the
+   network is down.
+2. Every `basecoat/js/**/*.js` across your sources, in source order,
+   recursively. Concatenated and minified.
 
-The trade-off: Tailwind processing happens in the browser (small first-paint
-cost), and you depend on a CDN at runtime. If you want a fully
-self-contained CSS with no CDN dependency, you'd need to run Tailwind
-locally and commit the output — out of scope for this library.
+There is no tree-shaking. The prebuilt bundle is small enough that
+stripping unused rules from your user CSS would save bytes at the
+cost of a much more complex pipeline. The minifier still strips
+comments and whitespace.
 
 ## File inclusion rules
 
 There is no required folder structure beyond the reserved `basecoat/`
-subdirectory. The library picks files up by extension and by location
-inside `basecoat/`. You can pass any number of source directories to
-`Init` (or `--source` to the CLI) and arrange them however you like:
+subdirectory. The library picks files up by location inside `basecoat/`.
+You can pass any number of source directories to `Init` (or `--source`
+to the CLI) and arrange them however you like:
 
 | File pattern | What it does |
 |---|---|
-| `**/*.html` (anywhere, recursive) | Scanned for class names used in the tree-shaker |
-| `basecoat/css/**/*.css` (recursive) | Concatenated into `basecoat.css` and tree-shaken |
-| `basecoat/js/**/*.js` (recursive) | Appended to `basecoat.js` after the embedded runtime |
-| `basecoat/html/**/*.html` (recursive) | Parsed as `html/template` fragments by `Template`/`TemplateFuncs` |
+| `basecoat/css/**/*.css` (recursive) | Concatenated into `basecoat.css` and minified |
+| `basecoat/js/**/*.js` (recursive) | Appended to `basecoat.js` (after the runtime in parent mode, alone in child mode) |
+| anything else | Served verbatim through the union FS — use this for HTML, images, etc. |
 
 Everything else in a source is ignored at generation time — it still
 passes through as a regular file served by `http.FileServer` because
@@ -132,59 +122,60 @@ A typical layout:
 ```
 my-project/
 ├── public/
-│   ├── index.html                # page template, parseable via Template()
-│   └── about.html                # also scanned for class names
+│   ├── index.html                # page template, parseable via template.ParseFS
+│   └── card.html                 # fragment, also served by the FS
 └── components/
     └── basecoat/
         ├── css/
         │   ├── button.css        # merged into basecoat.css
         │   └── card.css
-        ├── js/
-        │   ├── onClick.js        # appended to basecoat.js
-        │   └── todo.js
-        └── html/
-            └── card.html         # {{define "card"}}...{{end}} — fragment
+        └── js/
+            ├── onClick.js        # appended to basecoat.js
+            └── todo.js
 ```
 
 Both `public/` and `components/` are passed to `Init`; the library
-doesn't care that one is HTML-only and the other is CSS+JS+fragments.
-The generated `basecoat.css` is the concatenation of the downloaded
+doesn't care that one is HTML-only and the other is CSS+JS. The
+generated `basecoat.css` is the concatenation of the downloaded
 basecoat CSS plus every `basecoat/css/**/*.css` across all sources —
-tree-shaken and minified. The generated `basecoat.js` is the embedded
-basecoat runtime plus every `basecoat/js/**/*.js` across all sources —
-minified.
+minified. The generated `basecoat.js` is the embedded basecoat
+runtime plus every `basecoat/js/**/*.js` across all sources — minified.
 
 ## Templates
 
-`Template()` and `TemplateFuncs()` parse page templates out of the
-union FS and auto-load every `*.html` file under any source's
-`basecoat/html/` tree (recursive) as `html/template` fragments.
-Standard `{{define}}` / `{{block}}` / `{{template}}` directives wire
-fragments into page templates.
+The library no longer owns `html/template` parsing. Callers do it
+themselves with `template.ParseFS(ufs, globs...)`, which walks the
+union FS and matches the glob:
 
 ```go
-// Render the page, with a dict helper so we can build maps inline.
-funcs := template.FuncMap{
-    "dict": func(kv ...any) map[string]any {
-        m := make(map[string]any, len(kv)/2)
-        for i := 0; i < len(kv); i += 2 {
-            m[kv[i].(string)] = kv[i+1]
-        }
-        return m
-    },
-}
+t, err := template.ParseFS(ufs, "**/*.html")
+if err != nil { /* ... */ }
+_ = t.Execute(w, data)
+```
 
+The glob picks up every `.html` file across all sources, *except*
+paths under `basecoat/` (the namespace is reserved). Put your
+fragments anywhere outside `basecoat/` — e.g. at the source root, or
+in a `components/` or `fragments/` subdirectory. The standard
+`html/template` directives (`{{define}}`, `{{block}}`, `{{template}}`)
+wire the fragments into the page template.
+
+```go
 mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-    t, err := ufs.TemplateFuncs(funcs, "index.html")
+    t, err := template.ParseFS(ufs, "**/*.html")
     if err != nil {
         http.Error(w, err.Error(), 500)
         return
     }
+    // Register funcs per-request by cloning:
+    t = t.Funcs(template.FuncMap{
+        "dict": func(kv ...any) map[string]any { /* ... */ },
+    })
     _ = t.Execute(w, nil)
 })
 ```
 
-`components/basecoat/html/card.html`:
+`components/card.html`:
 
 ```html
 {{define "card"}}
@@ -201,47 +192,53 @@ mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 {{template "card" dict "Title" "Hello" "Description" "World"}}
 ```
 
-  `Template` caches its result and reuses it until the next `Reload`
-  (which the poll watcher triggers on file changes). Callers no longer
-  need to cache the `*template.Template` themselves. The cache is keyed
-  by the joined match list plus the identity of the funcs map — reuse
-  the same `template.FuncMap` value across calls (define it once at
-  startup) to get cache hits; a freshly-allocated FuncMap per call is
-  always a miss. A cached parse error is also reused until Reload, so a
-  broken template won't be re-parsed on every request.
+If multiple sources both define a fragment with the same name, the
+first source's `define` wins (the union FS dedupes by path).
+Scope your glob to a specific path (e.g.
+`template.ParseFS(ufs, "public/**/*.html")`) to keep each source's
+fragments in their own namespace.
 
-  ### Source-scoped templates
+## Parent vs child (SPA pattern)
 
-  `Template` and `TemplateFuncs` collect fragments from every source,
-  so two sources that both define a fragment named `card` will collide
-  (the path-colliding case dedupes to the first source; the
-  same-name-different-paths case silently lets the later file win). Use
-  `SourceTemplate` / `SourceTemplateFuncs` when each source is a
-  self-contained sub-app that should be rendered independently:
+`Init` is **parent mode**: it downloads the basecoat shell (the
+prebuilt `styles.css` and the latest runtime JS) and serves them
+alongside your user content. The parent's HTML loads
+`/basecoat.css` and `/basecoat.js` once, and that's the only place
+the basecoat shell is requested.
 
-  ```go
-  ufs, _ := basecoat.Init("./cache",
-      basecoat.Dir("./public"),
-      basecoat.Dir("./team-svc"), // has its own index.html + basecoat/html/card.html
-  )
-  mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-      t, err := ufs.SourceTemplate("public", "index.html")
-      if err != nil { /* ... */ }
-      t.Execute(w, nil)
-  })
-  mux.HandleFunc("GET /team/", func(w http.ResponseWriter, r *http.Request) {
-      t, err := ufs.SourceTemplate("team-svc", "index.html")
-      if err != nil { /* ... */ }
-      t.Execute(w, nil)
-  })
-  ```
+`InitChild` is **child mode**: no network, no cache. It produces
+just your user CSS (concatenated from every source's
+`basecoat/css/`) and just your user JS (concatenated from every
+source's `basecoat/js/`). No embedded runtime, because the parent's
+`basecoat.js` is already loaded — the child's JS just calls
+`basecoat.register(...)` to add its components to the global
+registry on page load.
 
-  Each source gets its own fragment namespace — `team-svc`'s `card`
-  won't be visible to `public`'s page, and vice versa. The cache is
-  keyed by the source name as well as the match list, so the two
-  calls get independent entries. A page scoped to source X can only
-  reference fragments defined in source X; `{{template "name" .}}`
-  lookups won't fall back to other sources.
+Typical SPA host:
+
+```go
+basecoat.Static = true
+
+parent,  _ := basecoat.Init("./cache", basecoat.Dir("./public"))
+team,    _ := basecoat.InitChild(basecoat.Dir("./team-svc"))
+billing, _ := basecoat.InitChild(basecoat.Dir("./billing-svc"))
+
+mux := http.NewServeMux()
+
+// Parent: serves the SPA shell.
+mux.Handle("/basecoat.css", serveFrom(parent, "basecoat.css"))
+mux.Handle("/basecoat.js",  serveFrom(parent, "basecoat.js"))
+
+// Each child: serves its own additive bundles.
+mux.Handle("/team/basecoat.css",    serveFrom(team,    "basecoat.css"))
+mux.Handle("/team/basecoat.js",     serveFrom(team,    "basecoat.js"))
+mux.Handle("/billing/basecoat.css", serveFrom(billing, "basecoat.css"))
+mux.Handle("/billing/basecoat.js",  serveFrom(billing, "basecoat.js"))
+```
+
+The SPA shell's `index.html` loads `/basecoat.css`, `/basecoat.js`,
+then loads each child's bundles. Each child is independently
+reloadable.
 
 ## Component JS
 
@@ -277,6 +274,11 @@ After an `innerHTML` swap (e.g. htmx fragment), re-initialise everything:
 ```js
 basecoat.initAll()
 ```
+
+In child mode, the `basecoat.js` you emit contains only your user JS —
+the runtime is already loaded by the parent. The user JS still calls
+`basecoat.register()` exactly the same way; it just relies on
+`window.basecoat` being on the page by the time it runs.
 
 ## Hot-swap sources
 
@@ -318,20 +320,28 @@ Semantics:
 The module ships with a command-line tool that generates `basecoat.css` and `basecoat.js` without running a server — useful for build pipelines and CI.
 
 ```sh
+# Parent: downloads styles + js, produces the full bundle
 go run github.com/yay101/go-basecoatui/cmd/basecoat \
+  --mode=parent \
   --source ./public \
   --source ./components \
-  --version ^0.3.11 \
+  --cache ./.basecoat-cache \
+  --output ./dist
+
+# Child: no network, just user content
+go run github.com/yay101/go-basecoatui/cmd/basecoat \
+  --mode=child \
+  --source ./team-svc \
   --output ./dist
 ```
 
 | Flag | Default | Description |
 |---|---|---|
+| `--mode` | `parent` | `parent` (downloads styles + js) or `child` (no network) |
 | `--source` | — | Source directory (repeatable) |
-| `--cache` | `./.basecoat-cache` | Download cache directory |
+| `--cache` | `./.basecoat-cache` | Download cache directory (parent mode only) |
 | `--output` | `./dist` | Output directory for generated files |
-| `--version` | `""` | Basecoat version constraint |
-| `--static` | `true` | Disable file watching |
+| `--static` | `true` | Disable file watching (default true for cli) |
 
 Install globally:
 
@@ -341,29 +351,22 @@ go install github.com/yay101/go-basecoatui/cmd/basecoat@latest
 
 ## Package-level configuration
 
-Set these before calling `Init`:
+Set this before calling `Init`:
 
 | Variable | Default | Description |
 |---|---|---|
-| `BasecoatVersion` | `""` | Semver constraint e.g. `"^0.3.11"`. Empty = skip downloads. |
 | `Static` | `false` | Disable the poll watcher. Generation runs once. |
-| `AutoUpdate` | `false` | Check unpkg for a newer basecoat version. Returns `ErrUpdateAvailable` if found. |
 
-## Adding a version entry
+## Updating the embedded basecoat.js runtime
 
-Edit `version.go` and add a new entry to `basecoatVersions`. The URL must
-point at a pre-compiled basecoat CSS — `basecoat.cdn.min.css` is the
-canonical source on unpkg.
-
-```go
-"0.4": {
-    BasecoatVersion: "0.4.0",
-    BasecoatURL:     "https://unpkg.com/basecoat-css@0.4.0/dist/basecoat.cdn.min.css",
-},
-```
-
-Embed the corresponding JS runtime file at `basecoatui/v0.4.0/basecoat.js` and register it in `basecoatUIEmbeds` in `basecoat.go`.
+The `//go:embed basecoatui/v0.3.11/basecoat.js` byte slice is the
+fallback used when the network download fails. The pinned version
+doesn't have to match the latest published runtime — it's a safety
+net, not the source of truth. To update it, drop the new file at
+`basecoatui/v<version>/basecoat.js` and change the embed directive in
+`basecoat.go`. The downloaded version is always the latest from
+jsdelivr; the embed is only consulted when the download fails.
 
 ## Dependencies
 
-**Zero.** Only `net/http`, `os`, `io`, `io/fs`, `embed`, `html/template`, `sort`, `sync`, `time`, `strings`, `regexp`, `errors`, `fmt`, `path/filepath`, `encoding/json`, `strconv` — all from the Go standard library.
+**Zero.** Only `net/http`, `os`, `io`, `io/fs`, `embed`, `html/template`, `sort`, `sync`, `time`, `strings`, `regexp`, `errors`, `fmt`, `path/filepath` — all from the Go standard library.

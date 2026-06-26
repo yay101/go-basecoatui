@@ -2,9 +2,9 @@ package basecoat
 
 import (
 	"bytes"
-	"html/template"
 	"io"
 	"io/fs"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -24,10 +24,18 @@ var (
 // regenerated whenever source content changes.
 //
 // Virtual files:
-//   - basecoat.css  minified, tree-shaken combination of basecoat CSS
-//     plus every basecoat/css/**/*.css across all sources
-//   - basecoat.js   embedded basecoat runtime plus every
+//   - basecoat.css  minified combination of (optionally) the downloaded
+//     basecoat styles.css plus every
+//     basecoat/css/**/*.css across all sources
+//   - basecoat.js   minified combination of (optionally) the
+//     basecoat.js runtime plus every
 //     basecoat/js/**/*.js across all sources
+//
+// In parent mode the optional basecoat assets are set (one or both):
+// the styles.css is read from disk on every Reload, the runtime is
+// held in memory as embeddedJS (with its on-disk path remembered for
+// logging). In child mode both are zero/nil and the output is just
+// user content.
 //
 // Non-virtual paths are resolved by searching sources in order and
 // returning the first match (classic overlay behaviour).
@@ -44,36 +52,65 @@ var (
 // (via AddSource / RemoveSource). After mutating the source set the
 // caller must invoke Reload to regenerate the virtual CSS/JS.
 type UnionFS struct {
-	mu           sync.RWMutex
-	sources      []sourceFS
-	sourceIdx    map[string]sourceRef
-	cssData      []byte
-	jsData       []byte
-	cachePath    string
-	basecoatPath string
-	resolvedVer  *resolvedVersion
-	embeddedJS   []byte
-	watcher      *pollWatcher
-	static       bool
+	mu        sync.RWMutex
+	sources   []sourceFS
+	sourceIdx map[string]sourceRef
+	cssData   []byte
+	jsData    []byte
 
-	// Template cache. Reload() invalidates by bumping templateGen;
-	// templateWith reads it under the read lock to decide whether to
-	// reuse a cached *template.Template. The cache is keyed by the
-	// joined match list; each entry also remembers the funcs map
-	// pointer (via reflect) so two callers with different FuncMaps
-	// for the same match don't reuse each other's template.
-	templateGen uint64
-	tmplCache   map[string]*tmplCacheEntry
+	// Parent-mode only. In child mode both stay empty and
+	// generateCSS/generateJS skip them, producing user-only output.
+	basecoatStylesPath string // path to downloaded styles.css; "" in child mode
+	basecoatJSPath     string // path to downloaded basecoat.js;  "" in child mode or when download failed
+	embeddedJS         []byte // fallback runtime bytes (used when jsPath is "")
+
+	cachePath string
+	watcher   *pollWatcher
+	static    bool
 }
 
-// tmplCacheEntry is one cached *template.Template plus the identity of
-// the funcs map it was parsed with.
-type tmplCacheEntry struct {
-	gen      uint64
-	funcsPtr uintptr
-	funcsNil bool
-	tmpl     *template.Template
-	parseErr error
+// newUnionFS builds a UnionFS wired up with the given sources and
+// parent-mode asset paths/bytes. sources are registered as
+// "init-0", "init-1", ... in order. The caller is responsible for
+// calling Reload (and startWatcher, if !Static) afterwards.
+func newUnionFS(sources []fs.FS, basecoatStylesPath, basecoatJSPath string, embeddedJS []byte, cachePath string) *UnionFS {
+	srcs := make([]sourceFS, 0, len(sources))
+	srcIdx := make(map[string]sourceRef, len(sources))
+	for i, s := range sources {
+		name := "init-" + itoa(i)
+		sf := sourceFS{name: name, fs: s}
+		if root, ok := watchableRoot(s); ok {
+			sf.root = root
+			sf.ws = newWatchSource(sf.root)
+		}
+		srcs = append(srcs, sf)
+		srcIdx[name] = sourceRef{index: len(srcs) - 1}
+	}
+
+	return &UnionFS{
+		sources:            srcs,
+		sourceIdx:          srcIdx,
+		basecoatStylesPath: basecoatStylesPath,
+		basecoatJSPath:     basecoatJSPath,
+		embeddedJS:         embeddedJS,
+		cachePath:          cachePath,
+		static:             Static,
+	}
+}
+
+// itoa avoids importing strconv just for source names.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
 }
 
 // sourceRef points at a sourceFS in u.sources.
@@ -85,6 +122,19 @@ type sourceRef struct {
 // namespace and must not resolve to a user file.
 func masked(name string) bool {
 	return name == "basecoat" || strings.HasPrefix(name, "basecoat/")
+}
+
+// snapshotSources returns an independent copy of the current sources
+// slice so callers can iterate it without holding the lock or racing
+// against AddSource / RemoveSource. sourceFS is a value type whose
+// fields are interface/pointer — copying the slice entries gives us
+// each entry's view of the source at the time of the snapshot.
+func (u *UnionFS) snapshotSources() []sourceFS {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	out := make([]sourceFS, len(u.sources))
+	copy(out, u.sources)
+	return out
 }
 
 // Open implements fs.FS. It handles the two virtual paths specially,
@@ -106,9 +156,7 @@ func (u *UnionFS) Open(name string) (fs.File, error) {
 	if masked(name) {
 		return nil, fs.ErrNotExist
 	}
-	u.mu.RLock()
-	sources := u.sources
-	u.mu.RUnlock()
+	sources := u.snapshotSources()
 	for _, src := range sources {
 		f, err := src.fs.Open(name)
 		if err == nil {
@@ -125,16 +173,18 @@ func (u *UnionFS) Open(name string) (fs.File, error) {
 // the two virtual file entries, masking any source entry that falls
 // inside the reserved basecoat/ namespace.
 func (u *UnionFS) openRootDir() (fs.File, error) {
+	sources := u.snapshotSources()
 	u.mu.RLock()
-	sources := u.sources
+	cssData := u.cssData
+	jsData := u.jsData
 	u.mu.RUnlock()
 
 	entries := mergeDirEntries(sources, ".", true)
 	// Append the two virtual files. Use a synthetic dirEntry with
 	// pre-built FileInfo so Stat-via-Info returns the right size.
 	entries = append(entries,
-		dirEntry{info: &virtualFileInfo{name: "basecoat.css", size: int64(len(u.cssData)), mod: time.Now()}},
-		dirEntry{info: &virtualFileInfo{name: "basecoat.js", size: int64(len(u.jsData)), mod: time.Now()}},
+		dirEntry{info: &virtualFileInfo{name: "basecoat.css", size: int64(len(cssData)), mod: time.Now()}},
+		dirEntry{info: &virtualFileInfo{name: "basecoat.js", size: int64(len(jsData)), mod: time.Now()}},
 	)
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	return &virtualDir{entries: entries}, nil
@@ -142,9 +192,7 @@ func (u *UnionFS) openRootDir() (fs.File, error) {
 
 // mergeDirEntries enumerates name across every source (first-match-wins
 // on entry name) and returns the union. When mask is true, entries that
-// fall inside the reserved basecoat/ namespace are dropped. The boolean
-// reports whether any source confirmed the path is a directory (used by
-// ReadDir to distinguish "dir exists but is empty" from "no such dir").
+// fall inside the reserved basecoat/ namespace are dropped.
 func mergeDirEntries(sources []sourceFS, name string, mask bool) []fs.DirEntry {
 	seen := make(map[string]bool)
 	var out []fs.DirEntry
@@ -202,9 +250,7 @@ func (u *UnionFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	if masked(name) {
 		return nil, fs.ErrNotExist
 	}
-	u.mu.RLock()
-	sources := u.sources
-	u.mu.RUnlock()
+	sources := u.snapshotSources()
 
 	entries := mergeDirEntries(sources, name, false)
 	if len(entries) == 0 {
@@ -276,11 +322,11 @@ func (u *UnionFS) Stat(name string) (fs.FileInfo, error) {
 }
 
 // AddSource registers src under name as a full source: its files are
-// served through Open/ReadDir/Stat AND contribute to generation
-// (CSS/JS output, class extraction, template fragments). Replaces any
-// existing source with the same name. Order of registration is preserved
-// for first-match-wins semantics across Open() calls. Does not
-// auto-reload — call Reload when the set of sources has settled.
+// served through Open/ReadDir/Stat AND contribute to generation (CSS
+// and JS output). Replaces any existing source with the same name.
+// Order of registration is preserved for first-match-wins semantics
+// across Open() calls. Does not auto-reload — call Reload when the set
+// of sources has settled.
 //
 // If src was returned by Dir() the underlying root path is tracked so
 // the poll watcher can poll it, but the poll watcher (if any) is not
@@ -340,32 +386,58 @@ func (u *UnionFS) reindexFull(from int) {
 // sources. Atomic with respect to Open() — readers see the previous or
 // next version, never a half-built one. Safe to call concurrently and
 // safe to call from inside the poll watcher callback.
-//
-// Reload also invalidates the template cache: the next Template /
-// TemplateFuncs call re-parses. The poll watcher calls Reload on file
-// changes, so templates stay fresh without callers doing their own
-// invalidation.
 func (u *UnionFS) Reload() {
 	u.mu.RLock()
 	sources := make([]sourceFS, len(u.sources))
 	copy(sources, u.sources)
+	stylesPath := u.basecoatStylesPath
+	jsPath := u.basecoatJSPath
+	embeddedJS := u.embeddedJS
 	u.mu.RUnlock()
 
-	used := extractUsedClasses(sources)
-	css, err := generateCSS(sources, u.basecoatPath, used)
+	// Re-read the cached basecoat.js on every Reload so a refreshed
+	// download between Inits is picked up without a server restart.
+	// In child mode (jsPath == "" and embeddedJS == nil) this is skipped.
+	var runtimeJS []byte
+	if jsPath != "" {
+		if b, err := os.ReadFile(jsPath); err == nil {
+			runtimeJS = b
+		} else {
+			runtimeJS = embeddedJS
+		}
+	} else {
+		runtimeJS = embeddedJS
+	}
+
+	css, err := generateCSS(sources, stylesPath)
 	if err != nil {
 		return
 	}
-	js, err := generateJS(sources, u.embeddedJS)
+	js, err := generateJS(sources, runtimeJS)
 	if err != nil {
 		return
 	}
 	u.mu.Lock()
 	u.cssData = []byte(css)
 	u.jsData = []byte(js)
-	u.templateGen++
-	u.tmplCache = nil
 	u.mu.Unlock()
+}
+
+// startWatcher wires up the 2-second poll watcher for any sources
+// passed via Dir(). AddSource'd sources are not retroactively watched
+// — the caller is responsible for triggering Reload for them. Safe to
+// call multiple times; later calls are no-ops.
+func (u *UnionFS) startWatcher() {
+	var watchSources []*watchSource
+	for _, src := range u.sources {
+		if src.ws != nil {
+			watchSources = append(watchSources, src.ws)
+		}
+	}
+	if len(watchSources) == 0 {
+		return
+	}
+	u.watcher = startPollWatcher(watchSources, u.Reload)
 }
 
 // Close stops the poll watcher goroutine. Call when the UnionFS is no

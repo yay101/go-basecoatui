@@ -4,20 +4,23 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"html/template"
 	"io"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 )
 
 // newTestUnionFS returns a UnionFS with no sources, no embedded JS, and
-// no poll watcher. The cache fields stay empty so Reload() falls back
-// to user CSS only. Suitable for testing AddSource/RemoveSource/Reload
-// and Open() in isolation, without hitting the network for basecoat
-// downloads.
+// no poll watcher. The cache fields stay empty so Reload() produces
+// only user content (no basecoat styles or runtime). Suitable for
+// testing AddSource/RemoveSource/Reload and Open() in isolation.
 func newTestUnionFS() *UnionFS {
 	return &UnionFS{
 		sources:   nil,
@@ -120,13 +123,8 @@ func TestUnionFS_RemoveSource_UnknownNameReturnsFalse(t *testing.T) {
 func TestUnionFS_Reload_UpdatesVirtualCSS(t *testing.T) {
 	u := newTestUnionFS()
 
-	// A source with both user CSS (rules the tree-shaker can keep) and
-	// matching HTML, plus a JS file. Reloading after AddSource should
-	// pull the .btn rule into basecoat.css and the app.js into
-	// basecoat.js.
 	src := fstest.MapFS{
-		"index.html":           &fstest.MapFile{Data: []byte(`<div class="btn">x</div>`)},
-		"basecoat/css/app.css": &fstest.MapFile{Data: []byte(`.btn{padding:1rem;color:red;}.unused{padding:2rem;}`)},
+		"basecoat/css/app.css": &fstest.MapFile{Data: []byte(`.btn{padding:1rem;color:red;}`)},
 		"basecoat/js/app.js":   &fstest.MapFile{Data: []byte(`basecoat.register('x','#x',function(el){});`)},
 	}
 
@@ -148,7 +146,7 @@ func TestUnionFS_Reload_UpdatesVirtualCSS(t *testing.T) {
 	}
 
 	// Remove the source and Reload again — the .btn rule should drop
-	// out of the tree-shaken CSS and the app.js out of basecoat.js.
+	// out of the CSS and the app.js out of basecoat.js.
 	u.RemoveSource("html")
 	u.Reload()
 
@@ -395,7 +393,6 @@ func TestUnionFS_ReadDir_MasksBasecoatNamespace(t *testing.T) {
 func TestUnionFS_Stat_VirtualFiles(t *testing.T) {
 	u := newTestUnionFS()
 	u.AddSource("html", fstest.MapFS{
-		"index.html":           &fstest.MapFile{Data: []byte(`<div class="btn">x</div>`)},
 		"basecoat/css/app.css": &fstest.MapFile{Data: []byte(`.btn{padding:1rem;color:red;}`)},
 		"basecoat/js/app.js":   &fstest.MapFile{Data: []byte(`basecoat.register('x','#x',function(){});`)},
 	})
@@ -454,377 +451,230 @@ func TestUnionFS_Stat_DelegatesToSources(t *testing.T) {
 	}
 }
 
-func TestUnionFS_Template_ParsesFragmentsAndPage(t *testing.T) {
-	u := newTestUnionFS()
-	u.AddSource("a", fstest.MapFS{
-		"index.html":              &fstest.MapFile{Data: []byte(`<h1>{{template "greet" .Name}}</h1>`)},
-		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "greet"}}Hello, {{.}}!{{end}}`)},
+// ---------------------------------------------------------------------------
+// Generation tests: parent mode (styles + runtime prefix), child mode
+// (user content only).
+// ---------------------------------------------------------------------------
+
+// newTestParentFS builds a UnionFS in parent mode wired up with a
+// fake styles.css path and a fake runtime path. Avoids the network.
+func newTestParentFS(sources []fs.FS, stylesCSS, runtimeJS string) *UnionFS {
+	u := newUnionFS(sources, stylesCSS, runtimeJS, nil, "")
+	u.Reload()
+	return u
+}
+
+// newTestChildFS builds a UnionFS in child mode (no parent assets).
+func newTestChildFS(sources []fs.FS) *UnionFS {
+	u := newUnionFS(sources, "", "", nil, "")
+	u.Reload()
+	return u
+}
+
+// writeTempFile writes content to a temp file and returns the path.
+// Used to fake a downloaded styles.css / basecoat.js for the
+// generation tests.
+func writeTempFile(t *testing.T, content string) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "basecoat-test-*.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(content); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	return f.Name()
+}
+
+func TestGenerateCSS_Parent_IncludesStylesAndUserCSS(t *testing.T) {
+	styles := writeTempFile(t, ".from-styles{padding:1rem;}")
+	js := writeTempFile(t, "// runtime")
+
+	u := newTestParentFS([]fs.FS{
+		fstest.MapFS{
+			"basecoat/css/a.css": &fstest.MapFile{Data: []byte(".a{padding:2rem;}")},
+			"basecoat/css/b.css": &fstest.MapFile{Data: []byte(".b{padding:3rem;}")},
+		},
+	}, styles, js)
+
+	css, err := readVirtual(t, u, "basecoat.css")
+	if err != nil {
+		t.Fatalf("readVirtual: %v", err)
+	}
+	got := string(css)
+	for _, want := range []string{".from-styles", ".a", ".b"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("parent basecoat.css missing %q; got: %s", want, got)
+		}
+	}
+}
+
+func TestGenerateCSS_Child_OnlyUserCSS(t *testing.T) {
+	u := newTestChildFS([]fs.FS{
+		fstest.MapFS{
+			"basecoat/css/a.css": &fstest.MapFile{Data: []byte(".a{padding:2rem;}")},
+			"basecoat/css/b.css": &fstest.MapFile{Data: []byte(".b{padding:3rem;}")},
+		},
 	})
 
-	tmpl, err := u.Template("index.html")
+	css, err := readVirtual(t, u, "basecoat.css")
 	if err != nil {
-		t.Fatalf("Template: %v", err)
+		t.Fatalf("readVirtual: %v", err)
 	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, struct{ Name string }{"world"}); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if got := strings.TrimSpace(buf.String()); got != "<h1>Hello, world!</h1>" {
-		t.Errorf("got %q, want %q", got, "<h1>Hello, world!</h1>")
+	got := string(css)
+	for _, want := range []string{".a", ".b"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("child basecoat.css missing %q; got: %s", want, got)
+		}
 	}
 }
 
-func TestUnionFS_Template_FragmentsAreRecursive(t *testing.T) {
-	u := newTestUnionFS()
-	u.AddSource("a", fstest.MapFS{
-		"index.html":                          &fstest.MapFile{Data: []byte(`<p>{{template "x" .}}</p>`)},
-		"basecoat/html/nested/deep/frag.html": &fstest.MapFile{Data: []byte(`{{define "x"}}deep{{end}}`)},
+func TestGenerateJS_Parent_IncludesRuntimeAndUserJS(t *testing.T) {
+	styles := writeTempFile(t, ".x{}")
+	// Marker has to survive the JS minifier, so we use a real
+	// identifier and a string literal — the minifier only strips
+	// comments and whitespace.
+	js := writeTempFile(t, `var RUNTIME_MARKER = 1;`)
+
+	u := newTestParentFS([]fs.FS{
+		fstest.MapFS{
+			"basecoat/js/a.js": &fstest.MapFile{Data: []byte("basecoat.register('a','.a',function(){});")},
+		},
+	}, styles, js)
+
+	body, err := readVirtual(t, u, "basecoat.js")
+	if err != nil {
+		t.Fatalf("readVirtual: %v", err)
+	}
+	got := string(body)
+	if !strings.Contains(got, "RUNTIME_MARKER") {
+		t.Errorf("parent basecoat.js missing runtime prefix; got: %s", got)
+	}
+	if !strings.Contains(got, "basecoat.register('a'") {
+		t.Errorf("parent basecoat.js missing user JS; got: %s", got)
+	}
+}
+
+func TestGenerateJS_Child_OnlyUserJS(t *testing.T) {
+	u := newTestChildFS([]fs.FS{
+		fstest.MapFS{
+			"basecoat/js/a.js": &fstest.MapFile{Data: []byte("basecoat.register('a','.a',function(){});")},
+		},
 	})
 
-	tmpl, err := u.Template("index.html")
+	body, err := readVirtual(t, u, "basecoat.js")
 	if err != nil {
-		t.Fatalf("Template: %v", err)
+		t.Fatalf("readVirtual: %v", err)
 	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if got := strings.TrimSpace(buf.String()); got != "<p>deep</p>" {
-		t.Errorf("got %q, want %q", got, "<p>deep</p>")
+	got := string(body)
+	if !strings.Contains(got, "basecoat.register('a'") {
+		t.Errorf("child basecoat.js missing user JS; got: %s", got)
 	}
 }
 
-func TestUnionFS_Template_NoFragmentsStillWorks(t *testing.T) {
-	u := newTestUnionFS()
-	u.AddSource("a", fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte(`<p>plain {{.}}</p>`)},
-	})
-
-	tmpl, err := u.Template("index.html")
-	if err != nil {
-		t.Fatalf("Template: %v", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, "ok"); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if got := strings.TrimSpace(buf.String()); got != "<p>plain ok</p>" {
-		t.Errorf("got %q, want %q", got, "<p>plain ok</p>")
-	}
-}
-
-func TestUnionFS_Template_CrossSourceFragments(t *testing.T) {
-	u := newTestUnionFS()
-	u.AddSource("page", fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte(`<h1>{{template "greet" .Name}}</h1>`)},
-	})
-	u.AddSource("frags", fstest.MapFS{
-		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "greet"}}Hello, {{.}}!{{end}}`)},
-	})
-
-	tmpl, err := u.Template("index.html")
-	if err != nil {
-		t.Fatalf("Template: %v", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, struct{ Name string }{"across"}); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if got := strings.TrimSpace(buf.String()); got != "<h1>Hello, across!</h1>" {
-		t.Errorf("got %q, want %q", got, "<h1>Hello, across!</h1>")
-	}
-}
-
-// countFS wraps an fs.FS and counts Open calls. Used to verify the
-// template cache short-circuits re-parsing.
-type countFS struct {
-	fs.FS
-	opens int
-}
-
-func (c *countFS) Open(name string) (fs.File, error) {
-	c.opens++
-	return c.FS.Open(name)
-}
-
-func TestUnionFS_Template_CacheHitOnRepeatCall(t *testing.T) {
-	u := newTestUnionFS()
-	inner := fstest.MapFS{
-		"index.html":              &fstest.MapFile{Data: []byte(`<p>{{.}}</p>`)},
-		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "x"}}X{{end}}`)},
-	}
-	c := &countFS{FS: inner}
-	u.AddSource("a", c)
-
-	t1, err := u.Template("index.html")
-	if err != nil {
-		t.Fatalf("first Template: %v", err)
-	}
-	opensAfterFirst := c.opens
-	if opensAfterFirst == 0 {
-		t.Fatal("first Template did not open any files")
-	}
-
-	t2, err := u.Template("index.html")
-	if err != nil {
-		t.Fatalf("second Template: %v", err)
-	}
-	if c.opens != opensAfterFirst {
-		t.Errorf("second Template re-read files: opens went from %d to %d (cache miss)", opensAfterFirst, c.opens)
-	}
-	if t1 != t2 {
-		t.Error("second Template returned a different *Template; cache should return the same pointer")
-	}
-}
-
-func TestUnionFS_Template_CacheInvalidatedByReload(t *testing.T) {
-	u := newTestUnionFS()
-	c := &countFS{FS: fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte(`<p>{{.}}</p>`)},
-	}}
-	u.AddSource("a", c)
-
-	if _, err := u.Template("index.html"); err != nil {
-		t.Fatalf("first Template: %v", err)
-	}
-	opensAfterFirst := c.opens
-
+func TestGenerateJS_EmbeddedFallbackWhenJSDownloadFails(t *testing.T) {
+	// Parent mode with a non-existent runtime path: should fall back
+	// to the embedded //go:embed bytes.
+	u := newTestParentFS([]fs.FS{
+		fstest.MapFS{
+			"basecoat/js/a.js": &fstest.MapFile{Data: []byte("basecoat.register('a','.a',function(){});")},
+		},
+	}, writeTempFile(t, ".x{}"), "/nonexistent/runtime.js")
+	u.embeddedJS = embeddedBasecoatJS
+	u.basecoatJSPath = ""
 	u.Reload()
 
-	if _, err := u.Template("index.html"); err != nil {
-		t.Fatalf("post-Reload Template: %v", err)
+	body, err := readVirtual(t, u, "basecoat.js")
+	if err != nil {
+		t.Fatalf("readVirtual: %v", err)
 	}
-	if c.opens == opensAfterFirst {
-		t.Error("Reload did not invalidate the template cache: no re-read happened")
+	if !strings.Contains(string(body), "basecoat.register('a'") {
+		t.Errorf("fallback basecoat.js missing user JS; got: %s", body)
+	}
+	if len(body) <= len("basecoat.register('a','.a',function(){});") {
+		t.Errorf("fallback basecoat.js too short — embedded fallback may be missing; got %d bytes", len(body))
 	}
 }
 
-func TestUnionFS_TemplateFuncs_CacheKeyedByFuncsIdentity(t *testing.T) {
-	u := newTestUnionFS()
-	c := &countFS{FS: fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte(`<p>{{upper .}}</p>`)},
-	}}
-	u.AddSource("a", c)
+// ---------------------------------------------------------------------------
+// ensureBasecoatJS: download round-trip with a fake CDN.
+// ---------------------------------------------------------------------------
 
-	funcsA := template.FuncMap{"upper": strings.ToUpper}
+func TestEnsureBasecoatJS_DownloadsAndCaches(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Write([]byte("/* runtime v1 */"))
+	}))
+	defer srv.Close()
 
-	tA, err := u.TemplateFuncs(funcsA, "index.html")
+	// Temporarily redirect the package-level URL to our test server.
+	orig := basecoatJSURL
+	basecoatJSURL = srv.URL
+	t.Cleanup(func() { basecoatJSURL = orig })
+
+	cacheDir := t.TempDir()
+	path, data, err := ensureBasecoatJS(cacheDir)
 	if err != nil {
-		t.Fatalf("TemplateFuncs A: %v", err)
+		t.Fatalf("ensureBasecoatJS: %v", err)
 	}
-	opensAfterA := c.opens
+	if path == "" {
+		t.Error("expected non-empty path on successful download")
+	}
+	if string(data) != "/* runtime v1 */" {
+		t.Errorf("got %q, want %q", data, "/* runtime v1 */")
+	}
+	if atomic.LoadInt32(&hits) != 1 {
+		t.Errorf("server hits: got %d, want 1", hits)
+	}
 
-	// Same funcs pointer → cache hit.
-	tA2, err := u.TemplateFuncs(funcsA, "index.html")
+	// Cache file should exist on disk.
+	cached, err := os.ReadFile(filepath.Join(cacheDir, "basecoat", "basecoat.js"))
 	if err != nil {
-		t.Fatalf("TemplateFuncs A repeat: %v", err)
+		t.Fatalf("read cached: %v", err)
 	}
-	if c.opens != opensAfterA {
-		t.Errorf("same FuncMap re-read files: %d -> %d (expected cache hit)", opensAfterA, c.opens)
-	}
-	if tA != tA2 {
-		t.Error("same FuncMap returned a different *Template")
-	}
-
-	// Different funcs pointer → cache miss.
-	funcsB := template.FuncMap{"upper": strings.ToUpper}
-	if _, err := u.TemplateFuncs(funcsB, "index.html"); err != nil {
-		t.Fatalf("TemplateFuncs B: %v", err)
-	}
-	if c.opens == opensAfterA {
-		t.Error("different FuncMap did not cause a cache miss")
+	if string(cached) != "/* runtime v1 */" {
+		t.Errorf("cached: got %q, want %q", cached, "/* runtime v1 */")
 	}
 }
 
-func TestUnionFS_Template_CachesParseErrorUntilReload(t *testing.T) {
-	u := newTestUnionFS()
-	c := &countFS{FS: fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte(`{{define "x"}}`)}, // broken: unclosed define
-	}}
-	u.AddSource("a", c)
-
-	if _, err := u.Template("index.html"); err == nil {
-		t.Fatal("expected parse error on broken template")
+func TestEnsureBasecoatJS_ServesCacheWhenCDNDown(t *testing.T) {
+	// Pre-populate the cache.
+	cacheDir := t.TempDir()
+	cached := []byte("/* cached runtime */")
+	if err := os.MkdirAll(filepath.Join(cacheDir, "basecoat"), 0755); err != nil {
+		t.Fatal(err)
 	}
-	opensAfterFirst := c.opens
-
-	// Second call should hit the cached error, not re-parse.
-	if _, err := u.Template("index.html"); err == nil {
-		t.Fatal("expected cached parse error on second call")
+	if err := os.WriteFile(filepath.Join(cacheDir, "basecoat", "basecoat.js"), cached, 0644); err != nil {
+		t.Fatal(err)
 	}
-	if c.opens != opensAfterFirst {
-		t.Errorf("broken template was re-parsed: %d -> %d (expected cached error)", opensAfterFirst, c.opens)
+
+	// Point the URL at a server that always 500s.
+	orig := basecoatJSURL
+	basecoatJSURL = "http://127.0.0.1:1/always-down" // closed port
+	t.Cleanup(func() { basecoatJSURL = orig })
+
+	path, data, err := ensureBasecoatJS(cacheDir)
+	if err != nil {
+		t.Fatalf("expected cache fallback to succeed; got %v", err)
+	}
+	if path == "" {
+		t.Error("expected non-empty path when cache exists")
+	}
+	if string(data) != string(cached) {
+		t.Errorf("got %q, want %q (cached bytes)", data, cached)
 	}
 }
 
-func TestUnionFS_SourceTemplate_FragmentsScopedPerSource(t *testing.T) {
-	u := newTestUnionFS()
-	u.AddSource("a", fstest.MapFS{
-		"index.html":              &fstest.MapFile{Data: []byte(`<h1>{{template "card" .}}</h1>`)},
-		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "card"}}A-card{{end}}`)},
-	})
-	u.AddSource("b", fstest.MapFS{
-		"index.html":              &fstest.MapFile{Data: []byte(`<h1>{{template "card" .}}</h1>`)},
-		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "card"}}B-card{{end}}`)},
-	})
+func TestEnsureBasecoatJS_ErrorsWhenNoCacheAndCDNDown(t *testing.T) {
+	orig := basecoatJSURL
+	basecoatJSURL = "http://127.0.0.1:1/always-down"
+	t.Cleanup(func() { basecoatJSURL = orig })
 
-	ta, err := u.SourceTemplate("a", "index.html")
-	if err != nil {
-		t.Fatalf("SourceTemplate(a): %v", err)
-	}
-	var buf bytes.Buffer
-	if err := ta.Execute(&buf, nil); err != nil {
-		t.Fatalf("Execute a: %v", err)
-	}
-	if got := strings.TrimSpace(buf.String()); got != "<h1>A-card</h1>" {
-		t.Errorf("a: got %q, want %q", got, "<h1>A-card</h1>")
-	}
-
-	tb, err := u.SourceTemplate("b", "index.html")
-	if err != nil {
-		t.Fatalf("SourceTemplate(b): %v", err)
-	}
-	buf.Reset()
-	if err := tb.Execute(&buf, nil); err != nil {
-		t.Fatalf("Execute b: %v", err)
-	}
-	if got := strings.TrimSpace(buf.String()); got != "<h1>B-card</h1>" {
-		t.Errorf("b: got %q, want %q", got, "<h1>B-card</h1>")
-	}
-}
-
-func TestUnionFS_SourceTemplate_DoesNotSeeOtherSourcesFragments(t *testing.T) {
-	u := newTestUnionFS()
-	u.AddSource("page", fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte(`<h1>{{template "frag" .}}</h1>`)},
-	})
-	u.AddSource("frags", fstest.MapFS{
-		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "frag"}}from-frags{{end}}`)},
-	})
-
-	// Scoping to "page" must not see fragments defined in "frags" —
-	// the page has no "frag" define of its own, so Execute should fail.
-	tmpl, err := u.SourceTemplate("page", "index.html")
-	if err != nil {
-		t.Fatalf("SourceTemplate: %v", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, nil); err == nil {
-		t.Errorf("expected execute to fail when scoped to a source that lacks the fragment, got output %q", buf.String())
-	}
-}
-
-func TestUnionFS_SourceTemplate_GlobalFirstWinsWhenPathsCollide(t *testing.T) {
-	// When two sources ship a fragment at the same path (e.g. both
-	// put a "card" at basecoat/html/frag.html), the global Template
-	// method dedupes by path and uses the first source. The user
-	// can't pick — and that's exactly why SourceTemplate exists:
-	// scope to a specific source and you get a clean, isolated
-	// fragment namespace per source.
-	u := newTestUnionFS()
-	u.AddSource("a", fstest.MapFS{
-		"index.html":              &fstest.MapFile{Data: []byte(`<h1>{{template "card" .}}</h1>`)},
-		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "card"}}A{{end}}`)},
-	})
-	u.AddSource("b", fstest.MapFS{
-		"index.html":              &fstest.MapFile{Data: []byte(`<h1>{{template "card" .}}</h1>`)},
-		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "card"}}B{{end}}`)},
-	})
-
-	tmpl, err := u.Template("index.html")
-	if err != nil {
-		t.Fatalf("global Template: %v", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if got := strings.TrimSpace(buf.String()); got != "<h1>A</h1>" {
-		t.Errorf("global Template first-wins: got %q, want %q", got, "<h1>A</h1>")
-	}
-
-	tb, err := u.SourceTemplate("b", "index.html")
-	if err != nil {
-		t.Fatalf("SourceTemplate(b): %v", err)
-	}
-	buf.Reset()
-	if err := tb.Execute(&buf, nil); err != nil {
-		t.Fatalf("Execute b: %v", err)
-	}
-	if got := strings.TrimSpace(buf.String()); got != "<h1>B</h1>" {
-		t.Errorf("SourceTemplate(b) isolated: got %q, want %q (b's own fragment should win)", got, "<h1>B</h1>")
-	}
-}
-
-func TestUnionFS_SourceTemplate_UnknownSourceErrors(t *testing.T) {
-	u := newTestUnionFS()
-	u.AddSource("a", fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte(`<p>{{.}}</p>`)},
-	})
-
-	if _, err := u.SourceTemplate("nope", "index.html"); err == nil {
-		t.Error("SourceTemplate with unknown source should return an error")
-	}
-}
-
-func TestUnionFS_SourceTemplateFuncs_FragmentsScopedPerSource(t *testing.T) {
-	u := newTestUnionFS()
-	u.AddSource("a", fstest.MapFS{
-		"index.html":              &fstest.MapFile{Data: []byte(`<h1>{{shout "hi"}}</h1>`)},
-		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "extra"}}A-extra{{end}}`)},
-	})
-	u.AddSource("b", fstest.MapFS{
-		"index.html":              &fstest.MapFile{Data: []byte(`<h1>{{whisper "HI"}}</h1>`)},
-		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "extra"}}B-extra{{end}}`)},
-	})
-
-	funcs := template.FuncMap{
-		"shout":   strings.ToUpper,
-		"whisper": strings.ToLower,
-	}
-
-	ta, err := u.SourceTemplateFuncs("a", funcs, "index.html")
-	if err != nil {
-		t.Fatalf("SourceTemplateFuncs(a): %v", err)
-	}
-	var buf bytes.Buffer
-	if err := ta.Execute(&buf, nil); err != nil {
-		t.Fatalf("Execute a: %v", err)
-	}
-	if got := strings.TrimSpace(buf.String()); got != "<h1>HI</h1>" {
-		t.Errorf("a: got %q, want %q", got, "<h1>HI</h1>")
-	}
-
-	tb, err := u.SourceTemplateFuncs("b", funcs, "index.html")
-	if err != nil {
-		t.Fatalf("SourceTemplateFuncs(b): %v", err)
-	}
-	buf.Reset()
-	if err := tb.Execute(&buf, nil); err != nil {
-		t.Fatalf("Execute b: %v", err)
-	}
-	if got := strings.TrimSpace(buf.String()); got != "<h1>hi</h1>" {
-		t.Errorf("b: got %q, want %q", got, "<h1>hi</h1>")
-	}
-}
-
-func TestUnionFS_SourceTemplate_CacheKeyIncludesSourceName(t *testing.T) {
-	u := newTestUnionFS()
-	c := &countFS{FS: fstest.MapFS{
-		"index.html":              &fstest.MapFile{Data: []byte(`<p>{{.}}</p>`)},
-		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "card"}}x{{end}}`)},
-	}}
-	u.AddSource("a", c)
-
-	if _, err := u.SourceTemplate("a", "index.html"); err != nil {
-		t.Fatalf("SourceTemplate: %v", err)
-	}
-	opensAfterFirst := c.opens
-
-	if _, err := u.SourceTemplate("a", "index.html"); err != nil {
-		t.Fatalf("SourceTemplate repeat: %v", err)
-	}
-	if c.opens != opensAfterFirst {
-		t.Errorf("repeat SourceTemplate re-read files: %d -> %d (expected cache hit)", opensAfterFirst, c.opens)
+	_, _, err := ensureBasecoatJS(t.TempDir())
+	if err == nil {
+		t.Error("expected error when network is down and no cache exists")
 	}
 }

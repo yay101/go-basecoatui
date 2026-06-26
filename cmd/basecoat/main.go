@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -17,22 +16,26 @@ func main() {
 	log.SetFlags(0)
 
 	var (
-		cache   = flag.String("cache", "./.basecoat-cache", "download cache directory")
+		mode    = flag.String("mode", "parent", "init mode: parent (downloads styles + js runtime) or child (no network, user content only)")
+		cache   = flag.String("cache", "./.basecoat-cache", "download cache directory (parent mode only)")
 		sources = multiFlag{}
 		output  = flag.String("output", "./dist", "output directory")
-		version = flag.String("version", "", "basecoat version constraint (e.g. ^0.3.11)")
 		static  = flag.Bool("static", true, "disable file watching (default true for cli)")
 	)
 	flag.Var(&sources, "source", "source directory (repeatable)")
 	flag.Parse()
 
 	if len(sources) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: basecoat --source ./components [--source ./public] [--version ^0.3.11]")
+		fmt.Fprintln(os.Stderr, "usage: basecoat --mode=parent|child --source DIR [--source DIR...] [--output DIR] [--cache DIR]")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
-	basecoat.BasecoatVersion = *version
+	if *mode != "parent" && *mode != "child" {
+		fmt.Fprintf(os.Stderr, "invalid --mode %q (want parent or child)\n", *mode)
+		os.Exit(1)
+	}
+
 	basecoat.Static = *static
 
 	var fses []fs.FS
@@ -40,10 +43,17 @@ func main() {
 		fses = append(fses, basecoat.Dir(s))
 	}
 
-	ufs, err := basecoat.Init(*cache, fses...)
-	if errors.Is(err, basecoat.ErrUpdateAvailable) {
-		log.Println("update available:", err)
-	} else if err != nil {
+	var (
+		ufs basecoat.FS
+		err error
+	)
+	switch *mode {
+	case "parent":
+		ufs, err = basecoat.Init(*cache, fses...)
+	case "child":
+		ufs, err = basecoat.InitChild(fses...)
+	}
+	if err != nil {
 		log.Fatal(err)
 	}
 	defer ufs.Close()
