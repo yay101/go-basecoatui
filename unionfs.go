@@ -46,7 +46,6 @@ var (
 type UnionFS struct {
 	mu           sync.RWMutex
 	sources      []sourceFS
-	assetSources []sourceFS
 	sourceIdx    map[string]sourceRef
 	cssData      []byte
 	jsData       []byte
@@ -77,10 +76,8 @@ type tmplCacheEntry struct {
 	parseErr error
 }
 
-// sourceRef points at a sourceFS in either u.sources or u.assetSources.
-// The asset flag tells RemoveSource which slice to splice.
+// sourceRef points at a sourceFS in u.sources.
 type sourceRef struct {
-	asset bool
 	index int
 }
 
@@ -281,10 +278,9 @@ func (u *UnionFS) Stat(name string) (fs.FileInfo, error) {
 // AddSource registers src under name as a full source: its files are
 // served through Open/ReadDir/Stat AND contribute to generation
 // (CSS/JS output, class extraction, template fragments). Replaces any
-// existing source (full or asset) with the same name. Order of
-// registration is preserved for first-match-wins semantics across
-// Open() calls. Does not auto-reload — call Reload when the set of
-// sources has settled.
+// existing source with the same name. Order of registration is preserved
+// for first-match-wins semantics across Open() calls. Does not
+// auto-reload — call Reload when the set of sources has settled.
 //
 // If src was returned by Dir() the underlying root path is tracked so
 // the poll watcher can poll it, but the poll watcher (if any) is not
@@ -295,24 +291,13 @@ func (u *UnionFS) AddSource(name string, src fs.FS) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
-	sf := sourceFS{name: name, fs: src, asset: false}
+	sf := sourceFS{name: name, fs: src}
 	if root, ok := watchableRoot(src); ok {
 		sf.root = root
 		sf.ws = newWatchSource(sf.root)
 	}
 
 	if ref, exists := u.sourceIdx[name]; exists {
-		// Replace in whichever slice the name currently lives in.
-		// If the kind is changing (asset -> full), we need to move
-		// the entry between slices.
-		if ref.asset {
-			// Was an asset source; promote to full source.
-			u.assetSources = append(u.assetSources[:ref.index], u.assetSources[ref.index+1:]...)
-			u.reindexAsset(ref.index)
-			u.sources = append(u.sources, sf)
-			u.sourceIdx[name] = sourceRef{asset: false, index: len(u.sources) - 1}
-			return
-		}
 		u.sources[ref.index] = sf
 		return
 	}
@@ -321,50 +306,13 @@ func (u *UnionFS) AddSource(name string, src fs.FS) {
 	if u.sourceIdx == nil {
 		u.sourceIdx = make(map[string]sourceRef)
 	}
-	u.sourceIdx[name] = sourceRef{asset: false, index: len(u.sources) - 1}
+	u.sourceIdx[name] = sourceRef{index: len(u.sources) - 1}
 }
 
-// AddAssetSource registers src under name as an asset-only source: its
-// basecoat/css/**, basecoat/js/**, basecoat/html/**, and any *.html
-// files contribute to generation (CSS/JS output, class extraction,
-// template fragments) exactly like a full source, but the source's
-// files are NOT served through Open/ReadDir/Stat. Use this for child
-// services that ship their CSS/JS/fragments to a parent but serve their
-// own pages via their own mux prefix.
-//
-// Replaces any existing source (full or asset) with the same name.
-// Not poll-watched — the caller must call Reload after changes.
-func (u *UnionFS) AddAssetSource(name string, src fs.FS) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-
-	sf := sourceFS{name: name, fs: src, asset: true}
-
-	if ref, exists := u.sourceIdx[name]; exists {
-		if !ref.asset {
-			// Was a full source; demote to asset source.
-			u.sources = append(u.sources[:ref.index], u.sources[ref.index+1:]...)
-			u.reindexFull(ref.index)
-			u.assetSources = append(u.assetSources, sf)
-			u.sourceIdx[name] = sourceRef{asset: true, index: len(u.assetSources) - 1}
-			return
-		}
-		u.assetSources[ref.index] = sf
-		return
-	}
-
-	u.assetSources = append(u.assetSources, sf)
-	if u.sourceIdx == nil {
-		u.sourceIdx = make(map[string]sourceRef)
-	}
-	u.sourceIdx[name] = sourceRef{asset: true, index: len(u.assetSources) - 1}
-}
-
-// RemoveSource drops the source (full or asset) with the given name.
-// Returns false if no such source was registered. Does not auto-reload
-// — call Reload to regenerate basecoat.css and basecoat.js without the
-// removed source. Order of the remaining sources in either slice is
-// preserved.
+// RemoveSource drops the source with the given name. Returns false if
+// no such source was registered. Does not auto-reload — call Reload to
+// regenerate basecoat.css and basecoat.js without the removed source.
+// Order of the remaining sources is preserved.
 func (u *UnionFS) RemoveSource(name string) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -374,13 +322,8 @@ func (u *UnionFS) RemoveSource(name string) bool {
 		return false
 	}
 
-	if ref.asset {
-		u.assetSources = append(u.assetSources[:ref.index], u.assetSources[ref.index+1:]...)
-		u.reindexAsset(ref.index)
-	} else {
-		u.sources = append(u.sources[:ref.index], u.sources[ref.index+1:]...)
-		u.reindexFull(ref.index)
-	}
+	u.sources = append(u.sources[:ref.index], u.sources[ref.index+1:]...)
+	u.reindexFull(ref.index)
 	delete(u.sourceIdx, name)
 	return true
 }
@@ -389,15 +332,7 @@ func (u *UnionFS) RemoveSource(name string) bool {
 // the given offset (used after a splice that shifts later entries).
 func (u *UnionFS) reindexFull(from int) {
 	for j := from; j < len(u.sources); j++ {
-		u.sourceIdx[u.sources[j].name] = sourceRef{asset: false, index: j}
-	}
-}
-
-// reindexAsset rebuilds the sourceIdx entries for u.assetSources
-// starting at the given offset.
-func (u *UnionFS) reindexAsset(from int) {
-	for j := from; j < len(u.assetSources); j++ {
-		u.sourceIdx[u.assetSources[j].name] = sourceRef{asset: true, index: j}
+		u.sourceIdx[u.sources[j].name] = sourceRef{index: j}
 	}
 }
 
@@ -414,16 +349,14 @@ func (u *UnionFS) Reload() {
 	u.mu.RLock()
 	sources := make([]sourceFS, len(u.sources))
 	copy(sources, u.sources)
-	assetSources := make([]sourceFS, len(u.assetSources))
-	copy(assetSources, u.assetSources)
 	u.mu.RUnlock()
 
-	used := extractUsedClasses(sources, assetSources)
-	css, err := generateCSS(sources, assetSources, u.basecoatPath, used)
+	used := extractUsedClasses(sources)
+	css, err := generateCSS(sources, u.basecoatPath, used)
 	if err != nil {
 		return
 	}
-	js, err := generateJS(sources, assetSources, u.embeddedJS)
+	js, err := generateJS(sources, u.embeddedJS)
 	if err != nil {
 		return
 	}
@@ -592,13 +525,10 @@ func watchableRoot(src fs.FS) (string, bool) {
 }
 
 // sourceFS pairs an fs.FS with a name, an optional filesystem root,
-// and an optional poll watcher. The asset flag records whether this
-// entry lives in assetSources (contributes to generation only) or in
-// sources (also served through Open/ReadDir/Stat).
+// and an optional poll watcher.
 type sourceFS struct {
-	name  string
-	fs    fs.FS
-	root  string
-	ws    *watchSource
-	asset bool
+	name string
+	fs   fs.FS
+	root string
+	ws   *watchSource
 }

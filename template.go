@@ -60,12 +60,10 @@ func (u *UnionFS) templateWith(funcs template.FuncMap, match ...string) (*templa
 	}
 	sources := make([]sourceFS, len(u.sources))
 	copy(sources, u.sources)
-	assetSources := make([]sourceFS, len(u.assetSources))
-	copy(assetSources, u.assetSources)
 	u.mu.RUnlock()
 
 	// Parse outside the lock — this does FS reads and can be slow.
-	tmpl, err := parseTemplate(sources, assetSources, funcs, match)
+	tmpl, err := parseTemplate(sources, funcs, match)
 
 	u.mu.Lock()
 	// Re-read gen under the write lock: a Reload may have bumped it
@@ -124,16 +122,12 @@ func funcsIdentity(funcs template.FuncMap) (ptr uintptr, isNil bool) {
 // parseTemplate does the actual FS reads and html/template parsing.
 // Extracted from templateWith so the cache path can run it outside the
 // UnionFS lock.
-//
-// Page names are resolved against sources only (asset sources are not
-// page-renderable). Fragments are collected from both sources and
-// assetSources so child services can ship fragments via AddAssetSource.
-func parseTemplate(sources, assetSources []sourceFS, funcs template.FuncMap, match []string) (*template.Template, error) {
+func parseTemplate(sources []sourceFS, funcs template.FuncMap, match []string) (*template.Template, error) {
 	pageNames, err := resolvePageNames(sources, match)
 	if err != nil {
 		return nil, err
 	}
-	fragments := collectFragments(sources, assetSources)
+	fragments := collectFragments(sources)
 
 	names := make([]string, 0, len(pageNames)+len(fragments))
 	names = append(names, pageNames...)
@@ -147,7 +141,7 @@ func parseTemplate(sources, assetSources []sourceFS, funcs template.FuncMap, mat
 		return t, nil
 	}
 
-	contents, err := readContents(append(sources, assetSources...), names)
+	contents, err := readContents(sources, names)
 	if err != nil {
 		return nil, err
 	}
@@ -187,13 +181,12 @@ func resolvePageNames(sources []sourceFS, match []string) ([]string, error) {
 	return out, nil
 }
 
-// collectFragments walks every source's and asset source's
-// basecoat/html/ subtree and returns the set of *.html files, deduped.
-// First occurrence wins.
-func collectFragments(sources, assetSources []sourceFS) []string {
+// collectFragments walks every source's basecoat/html/ subtree and
+// returns the set of *.html files, deduped. First occurrence wins.
+func collectFragments(sources []sourceFS) []string {
 	seen := make(map[string]bool)
 	var out []string
-	for _, src := range append(sources, assetSources...) {
+	for _, src := range sources {
 		fs.WalkDir(src.fs, "basecoat/html", func(p string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil

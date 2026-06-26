@@ -80,16 +80,15 @@ go run ./cmd/basecoat \
 When you change behaviour, these are the symbols callers depend on:
 
 - `basecoat.Init(cacheDir string, sources ...fs.FS) (FS, error)` — returns the `FS` interface
-- `basecoat.FS` interface — embeds `fs.FS`, `fs.ReadDirFS`, `fs.StatFS` plus `Reload`, `AddSource`, `AddAssetSource`, `RemoveSource`, `Template`, `TemplateFuncs`, `Close`
+- `basecoat.FS` interface — embeds `fs.FS`, `fs.ReadDirFS`, `fs.StatFS` plus `Reload`, `AddSource`, `RemoveSource`, `Template`, `TemplateFuncs`, `Close`
 - `basecoat.Dir(root string) fs.FS` — registers the path with the poll watcher
 - `(FS).Open(name string) (fs.File, error)` — must keep satisfying `fs.FS`; masks `basecoat/...` paths
 - `(FS).ReadDir(name string) ([]fs.DirEntry, error)` — merged listing; masks `basecoat` and `basecoat/...`
 - `(FS).Stat(name string) (fs.FileInfo, error)` — masks `basecoat/...`
 - `(FS).AddSource(name string, src fs.FS)` — hot-add a full source at runtime (served + contributes to generation)
-- `(FS).AddAssetSource(name string, src fs.FS)` — hot-add an asset-only source (contributes to CSS/JS/class extraction/fragments but is NOT served through Open/ReadDir/Stat)
-- `(FS).RemoveSource(name string) bool` — hot-remove a source of either kind; returns false if no such name
-- `(FS).Reload()` — rebuild `basecoat.css` and `basecoat.js` from the current set of sources (full and asset)
-- `(FS).Template(match ...string) (*html/template.Template, error)` — parse page (resolved against full sources) + auto-loaded `basecoat/html/**/*.html` fragments (collected from both full and asset sources)
+- `(FS).RemoveSource(name string) bool` — hot-remove a source; returns false if no such name
+- `(FS).Reload()` — rebuild `basecoat.css` and `basecoat.js` from the current set of sources
+- `(FS).Template(match ...string) (*html/template.Template, error)` — parse page + auto-loaded `basecoat/html/**/*.html` fragments
 - `(FS).TemplateFuncs(funcs template.FuncMap, match ...string) (*html/template.Template, error)` — like `Template` but registers funcs before parsing (fragments can call them)
 - `(FS).Close() error`
 - `*UnionFS` is still exported as the concrete implementation; tests and power users can type-assert/declare it directly
@@ -231,40 +230,6 @@ Semantics worth knowing:
   triggers Reload on file changes, so `Template` / `TemplateFuncs`
   stay fresh without callers doing their own invalidation. A cached
   parse error is also invalidated by Reload.
-
-### Asset-only sources (child services)
-
-`AddAssetSource(name, src fs.FS)` is for child services that ship
-their `basecoat/css/`, `basecoat/js/`, `basecoat/html/`, and any
-`*.html` files to a parent for inclusion in the parent's single
-`basecoat.css` / `basecoat.js`, but **serve their own pages via their
-own mux prefix**. The asset source is invisible to `Open` / `ReadDir`
-/ `Stat` — its files never appear at any URL on the parent. The
-parent's `Template()` resolves match targets against full sources
-only, but collects fragments from both full and asset sources.
-
-| Aspect | `AddSource` (full) | `AddAssetSource` (asset) |
-|---|---|---|
-| `Open` / `ReadDir` / `Stat` | yes | **no** |
-| `basecoat/css/**/*.css` → `basecoat.css` | tree-shaken | tree-shaken |
-| `basecoat/js/**/*.js` → `basecoat.js` | yes | yes |
-| `**/*.html` scanned for used classes | yes | yes |
-| `basecoat/html/**/*.html` as fragments | yes | yes |
-| Poll watcher | yes (if via `Dir()`) | no |
-
-```go
-ufs, _ := basecoat.Init("./cache", basecoat.Dir("./public"))
-// A child service sends its fs.FS over a socket; the parent adds it
-// as an asset-only source. The child's CSS/JS/fragments merge into
-// the parent's basecoat.css / basecoat.js; the child's pages are not
-// served by the parent (the child has its own mux prefix).
-ufs.AddAssetSource("team-svc", childFS)
-ufs.Reload()
-```
-
-Re-registering a name with either method replaces the existing entry
-and may switch its kind (full ↔ asset). `RemoveSource(name)` removes
-an entry of either kind.
 
 ## Gotchas
 

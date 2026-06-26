@@ -83,27 +83,14 @@ type FS interface {
 	// source with the same name. Does not auto-reload.
 	AddSource(name string, src fs.FS)
 
-	// AddAssetSource registers src under name as an asset-only source:
-	// its basecoat/css/**, basecoat/js/**, basecoat/html/**, and any
-	// *.html files contribute to generation (CSS/JS output, class
-	// extraction, template fragments) exactly like a full source, but
-	// the source's files are NOT served through Open/ReadDir/Stat. Use
-	// this for child services that ship their CSS/JS/fragments to a
-	// parent but serve their own pages via their own mux prefix.
-	// Replaces any existing source (full or asset) with the same name.
-	// Not poll-watched — the caller must call Reload after changes.
-	AddAssetSource(name string, src fs.FS)
-
-	// RemoveSource drops the source (full or asset) with the given
-	// name. Returns false if no such source was registered.
+	// RemoveSource drops the source with the given name. Returns
+	// false if no such source was registered.
 	RemoveSource(name string) bool
 
 	// Template parses match as html/template files out of the union
 	// FS, with all *.html files under any source's "basecoat/html/"
-	// tree (recursive, full and asset sources alike) parsed first as
-	// fragments. The match files themselves are resolved against
-	// full sources only — asset sources are not page-renderable. The
-	// result is cached and reused until the next Reload.
+	// tree (recursive) parsed first as fragments. The result is cached
+	// and reused until the next Reload.
 	Template(match ...string) (*template.Template, error)
 
 	// TemplateFuncs is like Template but registers funcs on the
@@ -133,7 +120,7 @@ func Init(cacheDir string, sources ...fs.FS) (FS, error) {
 			sf.ws = newWatchSource(sf.root)
 		}
 		srcs = append(srcs, sf)
-		srcIdx[name] = sourceRef{asset: false, index: len(srcs) - 1}
+		srcIdx[name] = sourceRef{index: len(srcs) - 1}
 	}
 
 	u := &UnionFS{
