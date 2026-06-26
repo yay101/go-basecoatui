@@ -98,6 +98,20 @@ type FS interface {
 	// those functions.
 	TemplateFuncs(funcs template.FuncMap, match ...string) (*template.Template, error)
 
+	// SourceTemplate is like Template but scopes resolution to the
+	// source registered as sourceName: the main template must live in
+	// that source, and only that source's "basecoat/html/**/*.html"
+	// fragments are collected. Use this when several sources each
+	// define fragments with the same name — the global Template
+	// methods share a single fragment namespace and would fail on
+	// duplicate {{define}} names. Returns an error if sourceName is
+	// not a registered source.
+	SourceTemplate(sourceName string, match ...string) (*template.Template, error)
+
+	// SourceTemplateFuncs is like SourceTemplate but registers funcs
+	// on the resulting template before parsing.
+	SourceTemplateFuncs(sourceName string, funcs template.FuncMap, match ...string) (*template.Template, error)
+
 	// Close stops the poll watcher goroutine.
 	Close() error
 }

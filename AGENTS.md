@@ -80,7 +80,7 @@ go run ./cmd/basecoat \
 When you change behaviour, these are the symbols callers depend on:
 
 - `basecoat.Init(cacheDir string, sources ...fs.FS) (FS, error)` — returns the `FS` interface
-- `basecoat.FS` interface — embeds `fs.FS`, `fs.ReadDirFS`, `fs.StatFS` plus `Reload`, `AddSource`, `RemoveSource`, `Template`, `TemplateFuncs`, `Close`
+- `basecoat.FS` interface — embeds `fs.FS`, `fs.ReadDirFS`, `fs.StatFS` plus `Reload`, `AddSource`, `RemoveSource`, `Template`, `TemplateFuncs`, `SourceTemplate`, `SourceTemplateFuncs`, `Close`
 - `basecoat.Dir(root string) fs.FS` — registers the path with the poll watcher
 - `(FS).Open(name string) (fs.File, error)` — must keep satisfying `fs.FS`; masks `basecoat/...` paths
 - `(FS).ReadDir(name string) ([]fs.DirEntry, error)` — merged listing; masks `basecoat` and `basecoat/...`
@@ -88,8 +88,10 @@ When you change behaviour, these are the symbols callers depend on:
 - `(FS).AddSource(name string, src fs.FS)` — hot-add a full source at runtime (served + contributes to generation)
 - `(FS).RemoveSource(name string) bool` — hot-remove a source; returns false if no such name
 - `(FS).Reload()` — rebuild `basecoat.css` and `basecoat.js` from the current set of sources
-- `(FS).Template(match ...string) (*html/template.Template, error)` — parse page + auto-loaded `basecoat/html/**/*.html` fragments
+- `(FS).Template(match ...string) (*html/template.Template, error)` — parse page + auto-loaded `basecoat/html/**/*.html` fragments from every source
 - `(FS).TemplateFuncs(funcs template.FuncMap, match ...string) (*html/template.Template, error)` — like `Template` but registers funcs before parsing (fragments can call them)
+- `(FS).SourceTemplate(sourceName string, match ...string) (*html/template.Template, error)` — like `Template` but the main template and the auto-loaded fragments are resolved from the named source only (its own fragment namespace)
+- `(FS).SourceTemplateFuncs(sourceName string, funcs template.FuncMap, match ...string) (*html/template.Template, error)` — like `SourceTemplate` but registers funcs before parsing
 - `(FS).Close() error`
 - `*UnionFS` is still exported as the concrete implementation; tests and power users can type-assert/declare it directly
 - Package vars: `BasecoatVersion`, `Static`, `AutoUpdate`
@@ -147,7 +149,7 @@ everything else is served verbatim through the union FS.
 | `**/*.html` (anywhere, recursive) | Scanned for class names used in the tree-shaker |
 | `basecoat/css/**/*.css` (recursive) | Concatenated into `basecoat.css` and tree-shaken |
 | `basecoat/js/**/*.js` (recursive) | Appended to `basecoat.js` after the embedded runtime |
-| `basecoat/html/**/*.html` (recursive) | Parsed as `html/template` fragments by `Template`/`TemplateFuncs` |
+| `basecoat/html/**/*.html` (recursive) | Parsed as `html/template` fragments by `Template`/`TemplateFuncs` (collected from every source) or by `SourceTemplate`/`SourceTemplateFuncs` (collected from a single named source) |
 
 Anything else in a source is ignored at generation time but still
 served as a regular file by `http.FileServer` because `UnionFS` is a
@@ -185,7 +187,45 @@ built-in components.
 
 HTML fragments use standard `html/template` directives (`{{define}}`,
 `{{block}}`) and are auto-loaded by `Template`/`TemplateFuncs` so page
-templates can reference them via `{{template "name" .}}`.
+templates can reference them via `{{template "name" .}}`. If you want
+each source's fragments to live in their own namespace (so two
+sources can each define a `"card"` fragment without colliding), use
+`SourceTemplate(name, match...)` / `SourceTemplateFuncs(name, funcs,
+match...)` instead — the main template and fragments are then
+resolved from the named source only.
+
+### Render one source in isolation
+
+`SourceTemplate(sourceName, match...)` and
+`SourceTemplateFuncs(sourceName, funcs, match...)` parse the page
+template and collect fragments from the source registered as
+`sourceName` only. Use this when each source is a self-contained
+sub-app (its own page plus its own fragments) and should be rendered
+independently of the rest of the union:
+
+```go
+ufs, _ := basecoat.Init("./cache",
+    basecoat.Dir("./public"),
+    basecoat.Dir("./team-svc"), // also has index.html + basecoat/html/card.html
+)
+mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+    t, err := ufs.SourceTemplate("public", "index.html")
+    if err != nil { /* ... */ }
+    t.Execute(w, nil)
+})
+mux.HandleFunc("GET /team/", func(w http.ResponseWriter, r *http.Request) {
+    t, err := ufs.SourceTemplate("team-svc", "index.html")
+    if err != nil { /* ... */ }
+    t.Execute(w, nil)
+})
+```
+
+The cache key for these calls includes the source name, so
+`SourceTemplate("public", "index.html")` and
+`SourceTemplate("team-svc", "index.html")` get independent cache
+entries (and each one is invalidated by the next `Reload`). A page
+scoped to source X can only reference fragments defined in source X;
+`{{template "name" .}}` lookups won't fall back to other sources.
 
 ### Regenerate the example dist
 
@@ -258,9 +298,17 @@ Semantics worth knowing:
   (define it once at startup) to get hits; a freshly-allocated FuncMap
   per call is always a miss. A cached parse error is also reused until
   Reload, so a broken template won't be re-parsed on every request.
-- `html/template` errors on duplicate `{{define}}` names across sources.
-  If two sources both define a fragment named `"card"`, `Template` will
-  fail at parse time. Keep fragment names unique across the union.
+  `SourceTemplate` / `SourceTemplateFuncs` share the same cache with
+  the source name prefixed to the key — different sources get
+  independent entries.
+- `Template` / `TemplateFuncs` collect fragments from every source, so
+  two sources shipping the same path (e.g. both define `"card"` at
+  `basecoat/html/frag.html`) will dedup to the first source. Two
+  sources shipping different paths that happen to define the same
+  template name will silently let the later one win (the parse uses
+  `t.New(name).Parse(content)` per file). Keep fragment names unique
+  across the union, or use `SourceTemplate` / `SourceTemplateFuncs`
+  to scope fragment resolution to a single source.
 - Callers that mount the FS over HTTP should add
   `mux.Handle("/basecoat/", http.NotFoundHandler())` so anything that
   isn't the two virtual files at the root 404s explicitly at the

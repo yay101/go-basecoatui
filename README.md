@@ -12,7 +12,7 @@ The library ships the **basecoat component classes only** (no Tailwind utility c
 - **Version pinning** — built-in version table maps basecoat releases to download URLs; semver constraints like `^0.3.11` resolve to a concrete CSS file
 - **Auto-download** — fetches and caches `basecoat.cdn.min.css` (component classes only) on first init
 - **Component JS** — embedded basecoat runtime (`window.basecoat.register(...)`) plus user-provided `basecoat/js/**/*.js` files; later `register()` calls override earlier ones
-- **html/template** — `Template()` / `TemplateFuncs()` parse page templates out of the union FS and auto-load every `basecoat/html/**/*.html` as a fragment (results cached, invalidated by `Reload`)
+- **html/template** — `Template()` / `TemplateFuncs()` parse page templates out of the union FS and auto-load every `basecoat/html/**/*.html` as a fragment (results cached, invalidated by `Reload`); `SourceTemplate()` / `SourceTemplateFuncs()` scope the same machinery to a single source so each source can have its own fragment namespace
 - **Live reload** — 2-second poll watcher regenerates on file changes (disable with `Static` mode for production)
 - **Auto-update notification** — optional check for newer basecoat versions, returns a sentinel error you can catch and log
 - **Reserved namespace** — `basecoat/...` is masked at the FS layer so user files never leak into the `/basecoat*` URL space
@@ -29,6 +29,7 @@ to your HTML yourself so utility classes work — see
 `Init` returns a `basecoat.FS` interface that embeds `fs.FS`,
 `fs.ReadDirFS`, and `fs.StatFS` plus the basecoat-specific operations
 (`Reload`, `AddSource`, `RemoveSource`, `Template`, `TemplateFuncs`,
+`SourceTemplate`, `SourceTemplateFuncs`,
 `Close`). It drops straight into `http.FileServer(http.FS(ufs))`.
 
 ```go
@@ -200,17 +201,47 @@ mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 {{template "card" dict "Title" "Hello" "Description" "World"}}
 ```
 
-`Template` caches its result and reuses it until the next `Reload`
-(which the poll watcher triggers on file changes). Callers no longer
-need to cache the `*template.Template` themselves. The cache is keyed
-by the joined match list plus the identity of the funcs map — reuse
-the same `template.FuncMap` value across calls (define it once at
-startup) to get cache hits; a freshly-allocated FuncMap per call is
-always a miss. A cached parse error is also reused until Reload, so a
-broken template won't be re-parsed on every request.
+  `Template` caches its result and reuses it until the next `Reload`
+  (which the poll watcher triggers on file changes). Callers no longer
+  need to cache the `*template.Template` themselves. The cache is keyed
+  by the joined match list plus the identity of the funcs map — reuse
+  the same `template.FuncMap` value across calls (define it once at
+  startup) to get cache hits; a freshly-allocated FuncMap per call is
+  always a miss. A cached parse error is also reused until Reload, so a
+  broken template won't be re-parsed on every request.
 
-`html/template` errors on duplicate `{{define}}` names across sources.
-Keep fragment names unique across the union.
+  ### Source-scoped templates
+
+  `Template` and `TemplateFuncs` collect fragments from every source,
+  so two sources that both define a fragment named `card` will collide
+  (the path-colliding case dedupes to the first source; the
+  same-name-different-paths case silently lets the later file win). Use
+  `SourceTemplate` / `SourceTemplateFuncs` when each source is a
+  self-contained sub-app that should be rendered independently:
+
+  ```go
+  ufs, _ := basecoat.Init("./cache",
+      basecoat.Dir("./public"),
+      basecoat.Dir("./team-svc"), // has its own index.html + basecoat/html/card.html
+  )
+  mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+      t, err := ufs.SourceTemplate("public", "index.html")
+      if err != nil { /* ... */ }
+      t.Execute(w, nil)
+  })
+  mux.HandleFunc("GET /team/", func(w http.ResponseWriter, r *http.Request) {
+      t, err := ufs.SourceTemplate("team-svc", "index.html")
+      if err != nil { /* ... */ }
+      t.Execute(w, nil)
+  })
+  ```
+
+  Each source gets its own fragment namespace — `team-svc`'s `card`
+  won't be visible to `public`'s page, and vice versa. The cache is
+  keyed by the source name as well as the match list, so the two
+  calls get independent entries. A page scoped to source X can only
+  reference fragments defined in source X; `{{template "name" .}}`
+  lookups won't fall back to other sources.
 
 ## Component JS
 

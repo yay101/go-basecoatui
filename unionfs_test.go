@@ -656,3 +656,175 @@ func TestUnionFS_Template_CachesParseErrorUntilReload(t *testing.T) {
 		t.Errorf("broken template was re-parsed: %d -> %d (expected cached error)", opensAfterFirst, c.opens)
 	}
 }
+
+func TestUnionFS_SourceTemplate_FragmentsScopedPerSource(t *testing.T) {
+	u := newTestUnionFS()
+	u.AddSource("a", fstest.MapFS{
+		"index.html":              &fstest.MapFile{Data: []byte(`<h1>{{template "card" .}}</h1>`)},
+		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "card"}}A-card{{end}}`)},
+	})
+	u.AddSource("b", fstest.MapFS{
+		"index.html":              &fstest.MapFile{Data: []byte(`<h1>{{template "card" .}}</h1>`)},
+		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "card"}}B-card{{end}}`)},
+	})
+
+	ta, err := u.SourceTemplate("a", "index.html")
+	if err != nil {
+		t.Fatalf("SourceTemplate(a): %v", err)
+	}
+	var buf bytes.Buffer
+	if err := ta.Execute(&buf, nil); err != nil {
+		t.Fatalf("Execute a: %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "<h1>A-card</h1>" {
+		t.Errorf("a: got %q, want %q", got, "<h1>A-card</h1>")
+	}
+
+	tb, err := u.SourceTemplate("b", "index.html")
+	if err != nil {
+		t.Fatalf("SourceTemplate(b): %v", err)
+	}
+	buf.Reset()
+	if err := tb.Execute(&buf, nil); err != nil {
+		t.Fatalf("Execute b: %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "<h1>B-card</h1>" {
+		t.Errorf("b: got %q, want %q", got, "<h1>B-card</h1>")
+	}
+}
+
+func TestUnionFS_SourceTemplate_DoesNotSeeOtherSourcesFragments(t *testing.T) {
+	u := newTestUnionFS()
+	u.AddSource("page", fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte(`<h1>{{template "frag" .}}</h1>`)},
+	})
+	u.AddSource("frags", fstest.MapFS{
+		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "frag"}}from-frags{{end}}`)},
+	})
+
+	// Scoping to "page" must not see fragments defined in "frags" —
+	// the page has no "frag" define of its own, so Execute should fail.
+	tmpl, err := u.SourceTemplate("page", "index.html")
+	if err != nil {
+		t.Fatalf("SourceTemplate: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, nil); err == nil {
+		t.Errorf("expected execute to fail when scoped to a source that lacks the fragment, got output %q", buf.String())
+	}
+}
+
+func TestUnionFS_SourceTemplate_GlobalFirstWinsWhenPathsCollide(t *testing.T) {
+	// When two sources ship a fragment at the same path (e.g. both
+	// put a "card" at basecoat/html/frag.html), the global Template
+	// method dedupes by path and uses the first source. The user
+	// can't pick — and that's exactly why SourceTemplate exists:
+	// scope to a specific source and you get a clean, isolated
+	// fragment namespace per source.
+	u := newTestUnionFS()
+	u.AddSource("a", fstest.MapFS{
+		"index.html":              &fstest.MapFile{Data: []byte(`<h1>{{template "card" .}}</h1>`)},
+		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "card"}}A{{end}}`)},
+	})
+	u.AddSource("b", fstest.MapFS{
+		"index.html":              &fstest.MapFile{Data: []byte(`<h1>{{template "card" .}}</h1>`)},
+		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "card"}}B{{end}}`)},
+	})
+
+	tmpl, err := u.Template("index.html")
+	if err != nil {
+		t.Fatalf("global Template: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "<h1>A</h1>" {
+		t.Errorf("global Template first-wins: got %q, want %q", got, "<h1>A</h1>")
+	}
+
+	tb, err := u.SourceTemplate("b", "index.html")
+	if err != nil {
+		t.Fatalf("SourceTemplate(b): %v", err)
+	}
+	buf.Reset()
+	if err := tb.Execute(&buf, nil); err != nil {
+		t.Fatalf("Execute b: %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "<h1>B</h1>" {
+		t.Errorf("SourceTemplate(b) isolated: got %q, want %q (b's own fragment should win)", got, "<h1>B</h1>")
+	}
+}
+
+func TestUnionFS_SourceTemplate_UnknownSourceErrors(t *testing.T) {
+	u := newTestUnionFS()
+	u.AddSource("a", fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte(`<p>{{.}}</p>`)},
+	})
+
+	if _, err := u.SourceTemplate("nope", "index.html"); err == nil {
+		t.Error("SourceTemplate with unknown source should return an error")
+	}
+}
+
+func TestUnionFS_SourceTemplateFuncs_FragmentsScopedPerSource(t *testing.T) {
+	u := newTestUnionFS()
+	u.AddSource("a", fstest.MapFS{
+		"index.html":              &fstest.MapFile{Data: []byte(`<h1>{{shout "hi"}}</h1>`)},
+		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "extra"}}A-extra{{end}}`)},
+	})
+	u.AddSource("b", fstest.MapFS{
+		"index.html":              &fstest.MapFile{Data: []byte(`<h1>{{whisper "HI"}}</h1>`)},
+		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "extra"}}B-extra{{end}}`)},
+	})
+
+	funcs := template.FuncMap{
+		"shout":   strings.ToUpper,
+		"whisper": strings.ToLower,
+	}
+
+	ta, err := u.SourceTemplateFuncs("a", funcs, "index.html")
+	if err != nil {
+		t.Fatalf("SourceTemplateFuncs(a): %v", err)
+	}
+	var buf bytes.Buffer
+	if err := ta.Execute(&buf, nil); err != nil {
+		t.Fatalf("Execute a: %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "<h1>HI</h1>" {
+		t.Errorf("a: got %q, want %q", got, "<h1>HI</h1>")
+	}
+
+	tb, err := u.SourceTemplateFuncs("b", funcs, "index.html")
+	if err != nil {
+		t.Fatalf("SourceTemplateFuncs(b): %v", err)
+	}
+	buf.Reset()
+	if err := tb.Execute(&buf, nil); err != nil {
+		t.Fatalf("Execute b: %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "<h1>hi</h1>" {
+		t.Errorf("b: got %q, want %q", got, "<h1>hi</h1>")
+	}
+}
+
+func TestUnionFS_SourceTemplate_CacheKeyIncludesSourceName(t *testing.T) {
+	u := newTestUnionFS()
+	c := &countFS{FS: fstest.MapFS{
+		"index.html":              &fstest.MapFile{Data: []byte(`<p>{{.}}</p>`)},
+		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte(`{{define "card"}}x{{end}}`)},
+	}}
+	u.AddSource("a", c)
+
+	if _, err := u.SourceTemplate("a", "index.html"); err != nil {
+		t.Fatalf("SourceTemplate: %v", err)
+	}
+	opensAfterFirst := c.opens
+
+	if _, err := u.SourceTemplate("a", "index.html"); err != nil {
+		t.Fatalf("SourceTemplate repeat: %v", err)
+	}
+	if c.opens != opensAfterFirst {
+		t.Errorf("repeat SourceTemplate re-read files: %d -> %d (expected cache hit)", opensAfterFirst, c.opens)
+	}
+}

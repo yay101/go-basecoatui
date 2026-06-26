@@ -26,8 +26,13 @@ import (
 // need to cache *template.Template values themselves. A parse error is
 // also cached: a broken template won't be re-parsed on every request
 // until the underlying source changes and Reload runs.
+//
+// All sources share one fragment namespace, so duplicate {{define}}
+// names across sources cause a parse error. Use SourceTemplate to
+// scope resolution to a single source when you need per-source
+// fragment isolation.
 func (u *UnionFS) Template(match ...string) (*template.Template, error) {
-	return u.templateWith(nil, match...)
+	return u.templateWithScoped("", nil, match...)
 }
 
 // TemplateFuncs is like Template but registers funcs on the resulting
@@ -36,16 +41,39 @@ func (u *UnionFS) Template(match ...string) (*template.Template, error) {
 // helper; Template alone cannot give fragments access to Funcs because
 // fragment parsing happens before the caller can add Funcs.
 //
-// The cache is keyed by the joined match list plus the identity of the
-// funcs map. Reuse the same FuncMap value across calls (define it once
-// at startup) to get cache hits; a freshly-allocated FuncMap for every
-// call is always a cache miss.
+// The cache is keyed by the joined match list plus the identity of
+// the funcs map. Reuse the same FuncMap value across calls (define it
+// once at startup) to get cache hits; a freshly-allocated FuncMap for
+// every call is always a cache miss.
 func (u *UnionFS) TemplateFuncs(funcs template.FuncMap, match ...string) (*template.Template, error) {
-	return u.templateWith(funcs, match...)
+	return u.templateWithScoped("", funcs, match...)
 }
 
-func (u *UnionFS) templateWith(funcs template.FuncMap, match ...string) (*template.Template, error) {
-	key := strings.Join(match, "\x00")
+// SourceTemplate is like Template but scopes resolution to the source
+// registered as sourceName. The main template must live in that
+// source, and only that source's "basecoat/html/**/*.html" fragments
+// are collected. Each source has its own fragment namespace, so two
+// sources can each define a fragment with the same name without
+// colliding. Returns an error if sourceName is not a registered
+// source. Use it when each source is a self-contained sub-app that
+// ships its own page plus its own fragments and should be rendered
+// independently of the rest of the union.
+func (u *UnionFS) SourceTemplate(sourceName string, match ...string) (*template.Template, error) {
+	return u.templateWithScoped(sourceName, nil, match...)
+}
+
+// SourceTemplateFuncs is like SourceTemplate but registers funcs on
+// the resulting template before parsing.
+func (u *UnionFS) SourceTemplateFuncs(sourceName string, funcs template.FuncMap, match ...string) (*template.Template, error) {
+	return u.templateWithScoped(sourceName, funcs, match...)
+}
+
+func (u *UnionFS) templateWithScoped(sourceName string, funcs template.FuncMap, match ...string) (*template.Template, error) {
+	// The cache key embeds sourceName so a scoped call and a global
+	// call with the same match list don't share an entry — they
+	// resolve from different source sets and so have different
+	// fragments.
+	key := sourceName + "\x00" + strings.Join(match, "\x00")
 	funcsPtr, funcsNil := funcsIdentity(funcs)
 
 	// Cache lookup under the read lock.
@@ -58,8 +86,21 @@ func (u *UnionFS) templateWith(funcs template.FuncMap, match ...string) (*templa
 		}
 		return e.tmpl, nil
 	}
-	sources := make([]sourceFS, len(u.sources))
-	copy(sources, u.sources)
+
+	var sources []sourceFS
+	if sourceName != "" {
+		ref, ok := u.sourceIdx[sourceName]
+		if !ok {
+			u.mu.RUnlock()
+			return nil, fmt.Errorf("template: no source named %q", sourceName)
+		}
+		// Snapshot just the one source so parseTemplate sees a
+		// single-element slice and walks only that tree.
+		sources = []sourceFS{u.sources[ref.index]}
+	} else {
+		sources = make([]sourceFS, len(u.sources))
+		copy(sources, u.sources)
+	}
 	u.mu.RUnlock()
 
 	// Parse outside the lock — this does FS reads and can be slow.
