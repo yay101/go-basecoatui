@@ -153,18 +153,22 @@ union FS.
 ├── about.html
 └── basecoat/                       # reserved namespace — masked at Open/ReadDir
     ├── css/**/*.css                # merged into basecoat.css (recursive)
-    └── js/**/*.js                  # appended to basecoat.js (parent: after runtime; child: alone)
+    ├── js/**/*.js                  # appended to basecoat.js (parent: after runtime; child: alone)
+    └── html/**/*.html              # NOT served; access via the raw source fs.FS for fragments
 ```
 
 | File pattern | What it does |
 |---|---|
 | `basecoat/css/**/*.css` (recursive) | Concatenated into `basecoat.css` and minified (parent: after the downloaded styles; child: alone) |
 | `basecoat/js/**/*.js` (recursive) | Appended to `basecoat.js` (parent: after the embedded runtime; child: alone) |
+| `basecoat/html/**/*.html` (recursive) | Masked at the union FS. Use the raw source `fs.FS` (saved before being passed to `Init`) to glob fragments with a second `template.ParseFS` call. |
 | anything else | Served verbatim through the union FS. Use this for HTML, images, etc. |
 
 Anything under `basecoat/...` is masked at the `Open` / `ReadDir` /
 `Stat` layer. If you want `template.ParseFS(ufs, "**/*.html")` to find
-your HTML files (including fragments), put them outside `basecoat/`.
+your HTML files (including fragments), put them outside `basecoat/`,
+or use the raw source `fs.FS` you passed to `Init` for a second
+`template.ParseFS` call (see "Fragments in a reserved folder" above).
 The library walks `basecoat/css/` and `basecoat/js/` directly via the
 raw source FS during generation, so the mask doesn't apply there.
 
@@ -202,6 +206,41 @@ _ = t.Execute(w, data)
 The glob walks the union FS, picking up every `.html` file across all
 sources. Put your fragments anywhere outside `basecoat/` so the mask
 doesn't hide them.
+
+### Fragments in a reserved folder
+
+If you want to keep fragments under each source's `basecoat/html/...`
+tree (for organisation, so they never appear at a URL), they're
+masked out of the union FS — the glob above won't find them. Use the
+raw source `fs.FS` you passed to `Init` for a second `ParseFS` call,
+then re-parse the fragment files into the page template so the page's
+`{{template "name" .}}` lookups resolve:
+
+```go
+elementsFS := basecoat.Dir("./elements")
+ufs, _ := basecoat.Init("./cache", elementsFS)
+
+// Page from the union FS (basecoat/html/ is masked out).
+pageTmpl, _ := template.ParseFS(ufs, "**/*.html")
+
+// Fragments from the raw source — another glob, another FS.
+fragMatches, _ := fs.Glob(elementsFS, "basecoat/html/*.html")
+for _, match := range fragMatches {
+    f, _ := elementsFS.Open(match)
+    data, _ := io.ReadAll(f)
+    f.Close()
+    pageTmpl, _ = pageTmpl.Parse(string(data))
+}
+_ = pageTmpl.Execute(w, data)
+```
+
+The same pattern works per-source in a multi-source setup: each
+source's raw `fs.FS` (saved before being passed to `Init`) is the
+view onto that source's `basecoat/...` subtree. Compose as many
+fragment globs as you need. The page and the fragments don't share a
+namespace in the union FS, so two sources can each define a fragment
+named `card.html` at the same path and each page picks up only its
+own.
 
 ### Render one source in isolation (parent mode)
 
