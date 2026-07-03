@@ -53,6 +53,11 @@ func generateJS(sources []sourceFS, runtimeJS []byte) (string, error) {
 
 	if len(runtimeJS) > 0 {
 		parts = append(parts, string(runtimeJS))
+		// Lifecycle shim: wraps basecoat.register with an optional
+		// destroy(el) and adds destroy(el)/destroyAll(root). Parent
+		// mode only — child bundles rely on the parent's shim being
+		// already on the page.
+		parts = append(parts, string(lifecycleShim()))
 	}
 
 	for _, src := range sources {

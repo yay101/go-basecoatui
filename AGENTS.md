@@ -107,10 +107,28 @@ When you change behaviour, these are the symbols callers depend on:
 - `*UnionFS` is still exported as the concrete implementation; tests and power users can type-assert/declare it directly
 - Package vars: `Static`
 
+### Component lifecycle (JS, parent bundle only)
+
+These are added by `lifecycle.js`, embedded via `lifecycle.go` and
+appended to `basecoat.js` immediately after the upstream runtime in
+parent mode. Child bundles inherit them from the parent page (the
+parent has already loaded the shim), so child mode does not append it.
+
+- `basecoat.register(name, selector, init, destroy?)` — optional 4th
+  arg; `destroy(el)` is called by `basecoat.destroy(el)` /
+  `destroyAll(root)`. Omit it for components with no teardown needs.
+- `basecoat.destroy(el)` — calls `destroy(el)` for every component
+  whose initialised element is `el` or inside `el`, then clears the
+  `data-<name>-initialized` marker.
+- `basecoat.destroyAll(root)` — `destroy(root || document.body)`.
+- `basecoat.unregister(name)` — stops calling destroy for `name`.
+- Idempotent at runtime (the shim double-loads harmlessly via the
+  `__lifecycle` guard).
+
 Internal but worth knowing: `sourceFS`, `sourceRef`, `virtualFile`,
 `virtualDir`, `pollWatcher`, `watchSource`, `watchableRoot`, `masked`,
 `walkExt`, `snapshotSources`, `newUnionFS`, `embeddedBasecoatJS`,
-`basecoatJSURL`.
+`basecoatJSURL`, `lifecycleJS`, `lifecycleShim`.
 
 ## Conventions
 
