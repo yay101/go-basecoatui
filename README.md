@@ -163,7 +163,7 @@ themselves with `template.ParseFS(ufs, globs...)`, which walks the
 union FS and matches the glob:
 
 ```go
-t, err := template.ParseFS(ufs, "**/*.html")
+t, err := template.ParseFS(ufs, "*.html")
 if err != nil { /* ... */ }
 _ = t.Execute(w, data)
 ```
@@ -177,7 +177,7 @@ wire the fragments into the page template.
 
 ```go
 mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-    t, err := template.ParseFS(ufs, "**/*.html")
+    t, err := template.ParseFS(ufs, "*.html")
     if err != nil {
         http.Error(w, err.Error(), 500)
         return
@@ -210,7 +210,7 @@ mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 If multiple sources both define a fragment with the same name, the
 first source's `define` wins (the union FS dedupes by path).
 Scope your glob to a specific path (e.g.
-`template.ParseFS(ufs, "public/**/*.html")`) to keep each source's
+`template.ParseFS(ufs, "public/*.html")`) to keep each source's
 fragments in their own namespace.
 
 ### Fragments in a reserved folder
@@ -218,19 +218,23 @@ fragments in their own namespace.
 If you want to keep fragments under each source's `basecoat/html/...`
 tree (for organisation, so they never appear at a URL), they're
 masked out of the served union FS — a plain `template.ParseFS(ufs,
-"**/*.html")` won't find them. Use `ufs.Unmasked()`, a read-only view
-of the same union that does not apply the `basecoat/` mask. A single
-glob then picks up pages (outside `basecoat/`) and fragments (under
-`basecoat/html/`) together, so `{{template "name" .}}` lookups in the
-page resolve without a second parse pass:
+"*.html")` won't find them. Use `ufs.Unmasked()`, a read-only view
+of the same union that does not apply the `basecoat/` mask.
+`template.ParseFS` uses `fs.Glob`, which honours `filepath.Match`
+semantics — and `filepath.Match` does **not** support `**`, so pass
+single-component globs: `"*.html"` for root-level pages and
+`"basecoat/html/*.html"` for fragments. One `ParseFS` call with both
+patterns picks up pages and fragments together, so
+`{{template "name" .}}` lookups in the page resolve without a second
+parse pass:
 
 ```go
 ufs, _ := basecoat.Init("./cache", basecoat.Watch("./elements"))
 
-// One glob against the unmasked view finds pages AND fragments.
-t, err := template.ParseFS(ufs.Unmasked(), "**/*.html")
+// Two globs (filepath.Match has no "**"): root pages + fragments.
+t, err := template.ParseFS(ufs.Unmasked(), "*.html", "basecoat/html/*.html")
 if err != nil { /* ... */ }
-_ = t.Execute(w, data)
+_ = t.ExecuteTemplate(w, "index.html", data)
 ```
 
 `Unmasked()` shares the underlying sources and regenerated
@@ -252,7 +256,7 @@ elementsFS := basecoat.Watch("./elements")
 ufs, _ := basecoat.Init("./cache", elementsFS)
 
 // Page from the union FS (basecoat/html/ is masked out).
-pageTmpl, err := template.ParseFS(ufs, "**/*.html")
+pageTmpl, err := template.ParseFS(ufs, "*.html")
 if err != nil { /* ... */ }
 
 // Fragments from the raw source — another glob, another FS.

@@ -87,7 +87,7 @@ go run ./cmd/basecoat --mode=child \
 | `minify.go` | `minifyCSS`, `minifyJS` — simple textual passes. |
 | `basecoatui/v0.X.Y/basecoat.js` | Embedded basecoat JS runtime, used as a last-resort fallback by callers that construct a `*UnionFS` directly (`Init` no longer falls back to it silently). |
 | `cmd/basecoat/main.go` | CLI with `--mode=parent|child`, `--cache`, repeated `--source`. |
-| `example/` | Runnable demo server that uses `template.ParseFS(ufs, "**/*.html")` in its index handler. |
+| `example/` | Runnable demo server that uses `template.ParseFS(ufs.Unmasked(), "*.html", "basecoat/html/*.html")` in its index handler. |
 
 ## Public API surface
 
@@ -222,14 +222,19 @@ themselves with `template.ParseFS(ufs, globs...)` against the union FS:
 ```go
 ufs, _ := basecoat.Init("./cache", basecoat.Watch("./public"))
 
-t, err := template.ParseFS(ufs, "**/*.html")
+t, err := template.ParseFS(ufs, "*.html")
 if err != nil { /* ... */ }
 _ = t.Execute(w, data)
 ```
 
 The glob walks the union FS, picking up every `.html` file across all
-sources. Put your fragments anywhere outside `basecoat/` so the mask
-doesn't hide them.
+sources. Note that `template.ParseFS` uses `fs.Glob`, which honours
+`filepath.Match` semantics — and `filepath.Match` does **not** support
+`**`. Use `"*.html"` for files at the union root, or a single-component
+glob like `"components/*.html"` for one level of subdirectory. Put your
+fragments anywhere outside `basecoat/` so the mask doesn't hide them,
+or parse against `ufs.Unmasked()` (see "Fragments in a reserved
+folder").
 
 ### Fragments in a reserved folder
 
@@ -237,17 +242,20 @@ If you want to keep fragments under each source's `basecoat/html/...`
 tree (for organisation, so they never appear at a URL), they're masked
 out of the served union FS — a plain `template.ParseFS(ufs, ...)`
 won't find them. Use `ufs.Unmasked()`, a read-only view of the same
-union that does not apply the `basecoat/` mask. A single glob then
-picks up pages (outside `basecoat/`) and fragments (under
-`basecoat/html/`) together, so `{{template "name" .}}` lookups in the
+union that does not apply the `basecoat/` mask. `template.ParseFS`
+uses `fs.Glob`, which honours `filepath.Match` semantics — and
+`filepath.Match` does **not** support `**`, so pass single-component
+globs: `"*.html"` for root-level pages and `"basecoat/html/*.html"`
+for fragments. One `ParseFS` call with both patterns picks up pages
+and fragments together, so `{{template "name" .}}` lookups in the
 page resolve without a second parse pass:
 
 ```go
 ufs, _ := basecoat.Init("./cache", basecoat.Watch("./elements"))
 
-// One glob against the unmasked view finds pages AND fragments.
-t, _ := template.ParseFS(ufs.Unmasked(), "**/*.html")
-_ = t.Execute(w, data)
+// Two globs (filepath.Match has no "**"): root pages + fragments.
+t, _ := template.ParseFS(ufs.Unmasked(), "*.html", "basecoat/html/*.html")
+_ = t.ExecuteTemplate(w, "index.html", data)
 ```
 
 `Unmasked()` shares the underlying sources and regenerated
@@ -268,7 +276,7 @@ only for reference:
 elementsFS := basecoat.Watch("./elements")
 ufs, _ := basecoat.Init("./cache", elementsFS)
 
-pageTmpl, _ := template.ParseFS(ufs, "**/*.html")
+pageTmpl, _ := template.ParseFS(ufs, "*.html")
 fragMatches, _ := fs.Glob(elementsFS, "basecoat/html/*.html")
 for _, match := range fragMatches {
     f, _ := elementsFS.Open(match)
@@ -297,7 +305,7 @@ special API for this — glob against a more specific path:
 
 ```go
 teamFS, _ := basecoat.InitChild(basecoat.Watch("./team-svc"))
-t, err := template.ParseFS(teamFS, "**/*.html")
+t, err := template.ParseFS(teamFS, "*.html")
 ```
 
 ### Host a parent + several children (SPA pattern)
@@ -404,9 +412,15 @@ Semantics worth knowing:
 - Cache layout is `{cacheDir}/basecoat/{styles.css,basecoat.js}`. Changing
   this shape will invalidate every existing user's cache.
 - HTML files inside `basecoat/...` are masked from `Open` / `ReadDir` /
-  `Stat` (and from `template.ParseFS(ufs, "**/*.html")` globs). To find
+  `Stat` (and from `template.ParseFS(ufs, "*.html")` globs). To find
   them with a glob, either put them outside `basecoat/`, or parse
   against `ufs.Unmasked()` (see "Fragments in a reserved folder").
+- `template.ParseFS` uses `fs.Glob`, which honours `filepath.Match`
+  semantics — and `filepath.Match` does **not** support `**`. Use
+  `"*.html"` for files at the union root, or a single-component glob
+  like `"components/*.html"` for one level of subdirectory. For
+  fragments under `basecoat/html/`, parse against `ufs.Unmasked()`
+  with `"basecoat/html/*.html"`.
 - Callers that mount the FS over HTTP should add
   `mux.Handle("/basecoat/", http.NotFoundHandler())` so anything that
   isn't the two virtual files at the root 404s explicitly at the

@@ -16,7 +16,7 @@
   <header class="flex flex-col gap-4">
     <div class="flex flex-col gap-2">
       <h1 class="text-2xl font-bold tracking-tight sm:text-3xl md:text-4xl">basecoat examples</h1>
-      <p class="sm:text-lg text-muted-foreground">Six component samples from <a class="underline underline-offset-4" href="https://basecoatui.com" target="_blank">basecoatui.com</a> wired up with <code>basecoat.register()</code> and <code>basecoat:toast</code>.</p>
+      <p class="sm:text-lg text-muted-foreground">Six component samples from <a class="underline underline-offset-4" href="https://basecoatui.com" target="_blank">basecoatui.com</a> wired up with <code>basecoat.register()</code> and <code>toaster.toast()</code>.</p>
     </div>
   </header>
 
@@ -29,14 +29,14 @@
         <section>
           <ul class="grid gap-4">
             <li class="flex items-center gap-4">
-              <div class="w-10 h-10 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-sm font-medium shrink-0" aria-label="Sofia Davis">SD</div>
+              <span class="avatar" aria-label="Sofia Davis"><span>SD</span></span>
               <div class="flex flex-col gap-1 mr-auto">
                 <h3 class="text-sm font-medium leading-none">Sofia Davis</h3>
                 <p class="text-sm text-muted-foreground">m@example.com</p>
               </div>
 
               <div id="team-role-sofia" class="select">
-                <button type="button" class="btn-outline" id="team-role-sofia-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="team-role-sofia-listbox">
+                <button type="button" id="team-role-sofia-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="team-role-sofia-listbox">
                   <span class="truncate">Owner</span>
                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevrons-up-down-icon lucide-chevrons-up-down text-muted-foreground opacity-50 shrink-0"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
                 </button>
@@ -57,14 +57,14 @@
             </li>
 
             <li class="flex items-center gap-4">
-              <div class="w-10 h-10 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-sm font-medium shrink-0" aria-label="Jackson Lee">JL</div>
+              <span class="avatar" aria-label="Jackson Lee"><span>JL</span></span>
               <div class="flex flex-col gap-1 mr-auto">
                 <h3 class="text-sm font-medium leading-none">Jackson Lee</h3>
                 <p class="text-sm text-muted-foreground">p@example.com</p>
               </div>
 
               <div id="team-role-jackson" class="select">
-                <button type="button" class="btn-outline" id="team-role-jackson-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="team-role-jackson-listbox">
+                <button type="button" id="team-role-jackson-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="team-role-jackson-listbox">
                   <span class="truncate">Empty</span>
                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevrons-up-down-icon lucide-chevrons-up-down text-muted-foreground opacity-50 shrink-0"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
                 </button>
@@ -86,14 +86,14 @@
             </li>
 
             <li class="flex items-center gap-4">
-              <div class="w-10 h-10 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-sm font-medium shrink-0" aria-label="Isabella Nguyen">IN</div>
+              <span class="avatar" aria-label="Isabella Nguyen"><span>IN</span></span>
               <div class="flex flex-col gap-1 mr-auto">
                 <h3 class="text-sm font-medium leading-none">Isabella Nguyen</h3>
                 <p class="text-sm text-muted-foreground">i@example.com</p>
               </div>
 
               <div id="team-role-isabella" class="select">
-                <button type="button" class="btn-outline" id="team-role-isabella-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="team-role-isabella-listbox">
+                <button type="button" id="team-role-isabella-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="team-role-isabella-listbox">
                   <span class="truncate">Viewer</span>
                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevrons-up-down-icon lucide-chevrons-up-down text-muted-foreground opacity-50 shrink-0"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
                 </button>
@@ -142,14 +142,14 @@
           </label>
         </section>
         <footer>
-          <button type="button" class="btn-outline w-full" data-cookies-save>Save preferences</button>
+          <button type="button" class="btn w-full" data-variant="outline" data-cookies-save>Save preferences</button>
         </footer>
       </div>
 
       <div class="card" id="example-payment">
         {{template "card-header" dict "Title" "Payment Method" "Description" "Add a new payment method to your account."}}
         <section>
-          <form class="form grid gap-6" data-payment-form>
+          <form class="grid gap-6" data-payment-form>
             <ul class="flex gap-4">
               <li class="flex-1">
                 <input type="radio" name="payment-method-type" id="payment-method-type-card" value="card" class="hidden peer" checked />
@@ -174,21 +174,21 @@
               </li>
             </ul>
             <div class="grid gap-2">
-              <label for="payment-method-name">Name</label>
-              <input type="text" id="payment-method-name" name="name" placeholder="John Doe">
+              <label class="label" for="payment-method-name">Name</label>
+              <input class="input" type="text" id="payment-method-name" name="name" placeholder="John Doe">
             </div>
             <div class="grid gap-2">
-              <label for="payment-method-city">City</label>
-              <input type="text" id="payment-method-city" name="city" placeholder="New York">
+              <label class="label" for="payment-method-city">City</label>
+              <input class="input" type="text" id="payment-method-city" name="city" placeholder="New York">
             </div>
             <div class="grid gap-2">
-              <label for="payment-method-card-number">Card Number</label>
-              <input type="text" id="payment-method-card-number" name="card_number" placeholder="1234 5678 9012 3456">
+              <label class="label" for="payment-method-card-number">Card Number</label>
+              <input class="input" type="text" id="payment-method-card-number" name="card_number" placeholder="1234 5678 9012 3456">
             </div>
             <div class="flex gap-4">
               <div class="grid gap-2 flex-1">
-                <label for="payment-method-expiration-month">Expires</label>
-                <select id="payment-method-expiration-month" name="expiration_month" class="w-full">
+                <label class="label" for="payment-method-expiration-month">Expires</label>
+                <select class="select" id="payment-method-expiration-month" name="expiration_month">
                   <option value="01">January</option>
                   <option value="02">February</option>
                   <option value="03">March</option>
@@ -204,8 +204,8 @@
                 </select>
               </div>
               <div class="grid gap-2 flex-1">
-                <label for="payment-method-expiration-year">Year</label>
-                <select id="payment-method-expiration-year" name="expiration_year" class="w-full">
+                <label class="label" for="payment-method-expiration-year">Year</label>
+                <select class="select" id="payment-method-expiration-year" name="expiration_year">
                   <option value="2024">2024</option>
                   <option value="2025">2025</option>
                   <option value="2026">2026</option>
@@ -220,8 +220,8 @@
                 </select>
               </div>
               <div class="grid gap-2 flex-1">
-                <label for="payment-method-cvv">CVV</label>
-                <input type="text" id="payment-method-cvv" name="cvv" placeholder="123" maxlength="4" class="w-full">
+                <label class="label" for="payment-method-cvv">CVV</label>
+                <input class="input" type="text" id="payment-method-cvv" name="cvv" placeholder="123" maxlength="4">
               </div>
             </div>
             <button type="button" class="btn w-full" data-payment-continue>Continue</button>
@@ -236,12 +236,12 @@
       <div class="card" id="example-chat">
         <section class="space-y-6">
           <header class="flex items-center gap-2">
-            <div class="w-10 h-10 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-sm font-medium shrink-0" aria-label="Sofia Davis">SD</div>
+            <span class="avatar" aria-label="Sofia Davis"><span>SD</span></span>
             <div class="flex flex-col gap-1 mr-auto">
               <h3 class="text-sm font-medium leading-none">Sofia Davis</h3>
               <p class="text-sm text-muted-foreground">m@example.com</p>
             </div>
-            <button type="button" class="btn-icon-outline rounded-full" data-tooltip="New message">
+            <button type="button" class="btn" data-variant="outline" data-size="icon" data-tooltip="New message">
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="M12 5v14" /></svg>
             </button>
           </header>
@@ -261,7 +261,7 @@
           </section>
           <footer class="flex items-center gap-2">
             <input type="text" class="input w-full" placeholder="Type your message here..." data-chat-input>
-            <button type="button" class="btn-icon" data-chat-send disabled>
+            <button type="button" class="btn" data-size="icon" data-chat-send disabled>
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" /><path d="m21.854 2.147-10.94 10.939" /></svg>
             </button>
           </footer>
@@ -272,11 +272,11 @@
         {{template "card-header" dict "Title" "Create an account" "Description" "Enter your email below to create your account"}}
         <section class="grid gap-6">
           <div class="flex gap-6">
-            <button type="button" class="btn-outline flex-1" data-account-provider="github">
+            <button type="button" class="btn flex-1" data-variant="outline" data-account-provider="github">
               <svg role="img" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><title>GitHub</title><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
               GitHub
             </button>
-            <button type="button" class="btn-outline flex-1" data-account-provider="google">
+            <button type="button" class="btn flex-1" data-variant="outline" data-account-provider="google">
               <svg role="img" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><title>Google</title><path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/></svg>
               Google
             </button>
@@ -289,17 +289,17 @@
               <span class="bg-card px-2 text-muted-foreground">Or continue with</span>
             </div>
           </div>
-          <form class="form grid gap-6" data-account-form>
+          <form class="grid gap-6" data-account-form>
             <div class="grid gap-2">
-              <label for="account-email">Email</label>
-              <input type="email" id="account-email" name="email">
+              <label class="label" for="account-email">Email</label>
+              <input class="input" type="email" id="account-email" name="email">
             </div>
             <div class="grid gap-2">
               <div class="flex items-center gap-2">
-                <label for="account-password">Password</label>
+                <label class="label" for="account-password">Password</label>
                 <a href="#" class="ml-auto inline-block text-sm underline-offset-4 hover:underline">Forgot your password?</a>
               </div>
-              <input type="password" id="account-password" name="password">
+              <input class="input" type="password" id="account-password" name="password">
             </div>
             <button type="button" class="btn w-full" data-account-submit>Create an account</button>
           </form>
@@ -309,11 +309,11 @@
       <div class="card" id="example-report">
         {{template "card-header" dict "Title" "Report an issue" "Description" "What area are you having problems with?"}}
         <section>
-          <form class="form grid gap-6" data-report-form>
+          <form class="grid gap-6" data-report-form>
             <div class="flex gap-4">
               <div class="grid gap-2 flex-1">
-                <label for="report-issue-area">Area</label>
-                <select id="report-issue-area" name="area" class="w-full">
+                <label class="label" for="report-issue-area">Area</label>
+                <select class="select" id="report-issue-area" name="area">
                   <option value="team">Team</option>
                   <option value="billing">Billing</option>
                   <option value="account">Account</option>
@@ -322,8 +322,8 @@
                 </select>
               </div>
               <div class="grid gap-2 flex-1">
-                <label for="report-issue-security-level">Security Level</label>
-                <select id="report-issue-security-level" name="security_level" class="w-full">
+                <label class="label" for="report-issue-security-level">Security Level</label>
+                <select class="select" id="report-issue-security-level" name="security_level">
                   <option value="1">Severity 1 (Highest)</option>
                   <option value="2">Severity 2</option>
                   <option value="3">Severity 3</option>
@@ -332,16 +332,16 @@
               </div>
             </div>
             <div class="grid gap-2">
-              <label for="report-issue-subject">Subject</label>
-              <input type="text" id="report-issue-subject" name="subject" placeholder="I need help with..." class="w-full">
+              <label class="label" for="report-issue-subject">Subject</label>
+              <input class="input" type="text" id="report-issue-subject" name="subject" placeholder="I need help with...">
             </div>
             <div class="grid gap-2">
-              <label for="report-issue-description">Description</label>
-              <textarea id="report-issue-description" name="description" placeholder="Please include all information relevant to your issue." class="w-full"></textarea>
+              <label class="label" for="report-issue-description">Description</label>
+              <textarea class="textarea" id="report-issue-description" name="description" placeholder="Please include all information relevant to your issue."></textarea>
             </div>
             <footer class="flex items-center gap-4 justify-between">
-              <button type="button" class="btn-sm-ghost" data-report-cancel>Cancel</button>
-              <button type="button" class="btn-sm" data-report-continue>Continue</button>
+              <button type="button" class="btn" data-variant="ghost" data-size="sm" data-report-cancel>Cancel</button>
+              <button type="button" class="btn" data-size="sm" data-report-continue>Continue</button>
             </footer>
           </form>
         </section>
@@ -355,8 +355,8 @@
             <span data-live-clock-time class="text-4xl font-mono tabular-nums">--:--:--</span>
           </div>
           <footer class="flex items-center gap-2">
-            <button type="button" class="btn-outline w-full" data-clock-destroy>Destroy clock</button>
-            <button type="button" class="btn-outline w-full" data-clock-reinit>Re-init clock</button>
+            <button type="button" class="btn w-full" data-variant="outline" data-clock-destroy>Destroy clock</button>
+            <button type="button" class="btn w-full" data-variant="outline" data-clock-reinit>Re-init clock</button>
           </footer>
           <p class="text-sm text-muted-foreground">
             Click <strong>Destroy clock</strong> to run

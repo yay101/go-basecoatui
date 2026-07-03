@@ -1,13 +1,11 @@
 window.toast = function(category, title, description) {
-  document.dispatchEvent(new CustomEvent('basecoat:toast', {
-    detail: {
-      config: {
-        category: category || 'info',
-        title: title,
-        description: description
-      }
-    }
-  }));
+  var toaster = document.getElementById('toaster');
+  if (!toaster || typeof toaster.toast !== 'function') return;
+  toaster.toast({
+    category: category || 'info',
+    title: title,
+    description: description
+  });
 };
 
 window.postJSON = function(url, data, onSuccess) {

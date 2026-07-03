@@ -60,22 +60,40 @@ func main() {
 
 // handleIndex renders the SPA shell. The page and fragments are parsed
 // from ufs.Unmasked() — an unmasked view of the union FS that resolves
-// basecoat/... paths to real user content, so a single
-// template.ParseFS("basecoat/html/*.html") glob picks up the fragments
-// the masked UnionFS hides from serving. The result is cached behind a
-// sync.Once and invalidated by the next Reload (which the poll watcher
-// triggers on file changes).
+// basecoat/... paths to real user content. Two globs are used because
+// fs.Glob (which template.ParseFS uses internally) honours
+// filepath.Match semantics, and filepath.Match does NOT support "**":
+// "*.html" picks up pages at the union root, and
+// "basecoat/html/*.html" picks up the fragments under the reserved
+// namespace. The two are composed in a single ParseFS call so the
+// page's {{template "name" .}} lookups resolve. The result is cached
+// behind a sync.Once and invalidated by the next Reload (which the
+// poll watcher triggers on file changes).
 func handleIndex(ufs basecoat.FS) http.HandlerFunc {
+	funcs := template.FuncMap{
+		"dict": dict,
+	}
 	var (
 		once     sync.Once
 		parsed   *template.Template
 		parseErr error
 	)
 	load := func() {
-		parsed, parseErr = template.ParseFS(ufs.Unmasked(), "**/*.html")
-	}
-	funcs := template.FuncMap{
-		"dict": dict,
+		// html/template resolves function calls at parse time, so
+		// the "dict" funcmap must be registered on the template
+		// before ParseFS. We parse against ufs.Unmasked() so the
+		// basecoat/html/*.html fragments resolve (the masked union
+		// FS hides them from serving). fs.Glob (used internally by
+		// ParseFS) honours filepath.Match, which has no "**"
+		// support, so we pass two single-component globs: one for
+		// root-level pages, one for the reserved fragment folder.
+		t := template.New("").Funcs(funcs)
+		t, err := t.ParseFS(ufs.Unmasked(), "*.html", "basecoat/html/*.html")
+		if err != nil {
+			parseErr = err
+			return
+		}
+		parsed = t
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		once.Do(load)
@@ -83,16 +101,15 @@ func handleIndex(ufs basecoat.FS) http.HandlerFunc {
 			http.Error(w, parseErr.Error(), http.StatusInternalServerError)
 			return
 		}
-		// t.Clone gives us a fresh template with funcs registered
-		// without re-parsing the underlying files.
+		// Clone so per-request mutations (e.g. additional funcs) do
+		// not race the cached parsed template.
 		t, err := parsed.Clone()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		t = t.Funcs(funcs)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := t.Execute(w, nil); err != nil {
+		if err := t.ExecuteTemplate(w, "index.html", nil); err != nil {
 			log.Printf("template execute: %v", err)
 		}
 	}

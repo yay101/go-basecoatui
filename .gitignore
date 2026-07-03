@@ -6,3 +6,4 @@ dist/
 example/dist/
 /basecoat
 cmd/basecoat/basecoat
+example/example
