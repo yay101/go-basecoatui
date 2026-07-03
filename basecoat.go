@@ -7,10 +7,11 @@
 // virtual files (basecoat.css, basecoat.js):
 //
 //   - Init(cacheDir, sources...) is parent mode. It downloads the
-//     prebuilt basecoat styles from basecoatui.com into cacheDir, and
-//     fetches the latest basecoat.js runtime from jsdelivr on every
-//     Init. basecoat.css = styles + user basecoat/css/**/*.css.
-//     basecoat.js = runtime + user basecoat/js/**/*.js.
+//     basecoat CDN bundle (basecoat.cdn.min.css, pinned to the latest
+//     1.x) from jsdelivr into cacheDir, and fetches the latest
+//     basecoat.js runtime from jsdelivr on every Init. basecoat.css =
+//     styles + user basecoat/css/**/*.css. basecoat.js = runtime +
+//     user basecoat/js/**/*.js.
 //
 //   - InitChild(sources...) is child mode. No network, no cache.
 //     basecoat.css = user basecoat/css/**/*.css only. basecoat.js =
@@ -84,13 +85,14 @@ type FS interface {
 }
 
 // Init creates the union filesystem in parent mode: it downloads
-// basecoat's prebuilt styles.css from basecoatui.com (cached on disk
-// after the first run, never refreshed), and fetches the latest
-// basecoat.js runtime from jsdelivr on every Init (the embedded
-// //go:embed byte slice is used as a fallback when the network is
-// down). basecoat.css = styles + user basecoat/css/**/*.css.
-// basecoat.js = runtime + user basecoat/js/**/*.js. Starts a poll
-// watcher for sources passed via Watch() unless Static is true.
+// basecoat's CDN bundle (basecoat.cdn.min.css, pinned to the latest
+// 1.x on jsdelivr) into cacheDir (cached on disk after the first run,
+// never refreshed), and fetches the latest basecoat.js runtime from
+// jsdelivr on every Init (the embedded //go:embed byte slice is used
+// as a fallback when the network is down). basecoat.css = styles +
+// user basecoat/css/**/*.css. basecoat.js = runtime + user
+// basecoat/js/**/*.js. Starts a poll watcher for sources passed via
+// Watch() unless Static is true.
 //
 // cacheDir is the local directory where downloaded assets are stored.
 // sources is a list of fs.FS values — use basecoat.Watch() for any that

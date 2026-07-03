@@ -36,11 +36,12 @@ import (
 )
 
 func main() {
-    // Parent mode: downloads the prebuilt basecoat styles from
-    // basecoatui.com and the latest basecoat.js runtime from jsdelivr.
+    // Parent mode: downloads the basecoat CDN bundle
+    // (basecoat.cdn.min.css, pinned to the latest 1.x) and the latest
+    // basecoat.js runtime from jsdelivr.
     ufs, err := basecoat.Init("./cache",
-        basecoat.Dir("./public"),
-        basecoat.Dir("./components"),
+        basecoat.Watch("./public"),
+        basecoat.Watch("./components"),
     )
     if err != nil {
         log.Fatal(err)
@@ -56,9 +57,9 @@ func main() {
 }
 ```
 
-Your `public/index.html` just loads the two bundles and is done — the
-`basecoat.css` from basecoatui.com already includes the Tailwind v4
-preflight and theme layer:
+Your `public/index.html` just loads the two bundles and is done —
+`basecoat.css` already includes the Tailwind v4 preflight and theme
+layer:
 
 ```html
 <!doctype html>
@@ -77,10 +78,13 @@ preflight and theme layer:
 ## How the CSS and JS are built
 
 `basecoat.css` is the concatenation of:
-1. The prebuilt `https://basecoatui.com/assets/styles.css` (downloaded
-   once on first `Init`, cached at `{cacheDir}/basecoat/styles.css`,
-   never refreshed). This is the complete basecoat + Tailwind v4 bundle
-   — component classes *and* utility classes.
+1. The basecoat CDN bundle fetched from
+   `https://cdn.jsdelivr.net/npm/basecoat-css@1/dist/basecoat.cdn.min.css`
+   (the URL is pinned to `@1`, so jsdelivr serves the latest 1.x
+   release; downloaded once on first `Init`, cached at
+   `{cacheDir}/basecoat/styles.css`, never refreshed). This is the
+   complete basecoat + Tailwind v4 bundle — component classes *and*
+   utility classes, preflight and theme included.
 2. Every `basecoat/css/**/*.css` across your sources, in source order,
    recursively. Concatenated and minified.
 
@@ -218,7 +222,7 @@ then re-parse the fragment files into the page template so the page's
 `{{template "name" .}}` lookups resolve:
 
 ```go
-elementsFS := basecoat.Dir("./elements")
+elementsFS := basecoat.Watch("./elements")
 ufs, _ := basecoat.Init("./cache", elementsFS)
 
 // Page from the union FS (basecoat/html/ is masked out).
@@ -267,9 +271,9 @@ Typical SPA host:
 ```go
 basecoat.Static = true
 
-parent,  _ := basecoat.Init("./cache", basecoat.Dir("./public"))
-team,    _ := basecoat.InitChild(basecoat.Dir("./team-svc"))
-billing, _ := basecoat.InitChild(basecoat.Dir("./billing-svc"))
+parent,  _ := basecoat.Init("./cache", basecoat.Watch("./public"))
+team,    _ := basecoat.InitChild(basecoat.Watch("./team-svc"))
+billing, _ := basecoat.InitChild(basecoat.Watch("./billing-svc"))
 
 mux := http.NewServeMux()
 

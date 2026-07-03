@@ -21,9 +21,9 @@ type apiResponse struct {
 
 func main() {
 	basecoat.Static = false
-	// Parent mode: downloads the prebuilt basecoat styles from
-	// basecoatui.com and the latest basecoat.js runtime from jsdelivr.
-	// basecoat.css already includes the Tailwind v4 preflight and
+	// Parent mode: downloads the basecoat CDN bundle
+	// (basecoat.cdn.min.css, pinned to the latest 1.x on jsdelivr) and
+	// the latest basecoat.js runtime from jsdelivr. basecoat.css already includes the Tailwind v4 preflight and
 	// theme layer, so no Tailwind browser script is needed.
 	//
 	// We keep references to the raw source fs.FS values we hand to

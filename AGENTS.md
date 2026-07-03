@@ -15,18 +15,18 @@ with the same two virtual files at the root (`basecoat.css`,
 `basecoat.js`):
 
 - **`Init(cacheDir, sources...)`** is **parent mode**. It downloads
-  basecoat's prebuilt styles from `https://basecoatui.com/assets/styles.css`
-  into `{cacheDir}/basecoat/styles.css` (download-once, never refreshed)
-  and fetches the latest basecoat.js runtime from jsdelivr on every
-  `Init`. `basecoat.css` = styles + user CSS. `basecoat.js` = runtime +
-  user JS.
+  basecoat's CDN bundle from `https://cdn.jsdelivr.net/npm/basecoat-css@1/dist/basecoat.cdn.min.css`
+  (pinned to the latest 1.x) into `{cacheDir}/basecoat/styles.css`
+  (download-once, never refreshed) and fetches the latest basecoat.js
+  runtime from jsdelivr on every `Init`. `basecoat.css` = styles +
+  user CSS. `basecoat.js` = runtime + user JS.
 - **`InitChild(sources...)`** is **child mode**. No network, no cache.
   `basecoat.css` = user CSS only. `basecoat.js` = user JS only — no
   embedded runtime, because the parent has already loaded it. The
   child's JS uses `basecoat.register()` on page load to add its
   components to the global registry.
 
-`basecoat.css` is the prebuilt bundle from basecoatui.com, which
+`basecoat.css` is the prebuilt basecoat CDN bundle, which
 already includes the Tailwind v4 preflight and theme layer. No
 `@tailwindcss/browser` script tag is required.
 
@@ -235,7 +235,7 @@ then re-parse the fragment files into the page template so the page's
 `{{template "name" .}}` lookups resolve:
 
 ```go
-elementsFS := basecoat.Dir("./elements")
+elementsFS := basecoat.Watch("./elements")
 ufs, _ := basecoat.Init("./cache", elementsFS)
 
 // Page from the union FS (basecoat/html/ is masked out).
@@ -267,7 +267,7 @@ to that source's subtree via the `*html/template` glob. There is no
 special API for this — glob against a more specific path:
 
 ```go
-teamFS, _ := basecoat.InitChild(basecoat.Dir("./team-svc"))
+teamFS, _ := basecoat.InitChild(basecoat.Watch("./team-svc"))
 t, err := template.ParseFS(teamFS, "**/*.html")
 ```
 
@@ -276,9 +276,9 @@ t, err := template.ParseFS(teamFS, "**/*.html")
 ```go
 basecoat.Static = true
 
-parent,   _ := basecoat.Init("./cache", basecoat.Dir("./public"))
-team,     _ := basecoat.InitChild(basecoat.Dir("./team-svc"))
-billing,  _ := basecoat.InitChild(basecoat.Dir("./billing-svc"))
+parent,   _ := basecoat.Init("./cache", basecoat.Watch("./public"))
+team,     _ := basecoat.InitChild(basecoat.Watch("./team-svc"))
+billing,  _ := basecoat.InitChild(basecoat.Watch("./billing-svc"))
 
 mux := http.NewServeMux()
 mux.Handle("/basecoat.css",  serveFrom(parent, "basecoat.css"))
@@ -342,16 +342,17 @@ Semantics worth knowing:
 - The CLI defaults `--static` to **true**; the `example/main.go` sets
   `basecoat.Static = false` to enable live reload. Do not "fix" this
   inconsistency — it matches each tool's use case.
-- Use `basecoat.Dir(root)`, not bare `os.DirFS(root)`, for any source you
+- Use `basecoat.Watch(root)`, not bare `os.DirFS(root)`, for any source you
   want the watcher to poll. `Dir()` is the only thing that registers the
   root for change detection.
 - The poll watcher reads `os.ReadDir` on the root only — it does not
   recurse. Changes in nested subdirectories (e.g. `components/basecoat/css/`)
   will still trigger regeneration because the parent dir's mtime updates,
   but the watcher cannot tell you *which* file changed.
-- `ensureBasecoatStyles` downloads `https://basecoatui.com/assets/styles.css`
-  on first Init and never refreshes. If you need a fresh copy, delete
-  `{cacheDir}/basecoat/styles.css` and restart.
+- `ensureBasecoatStyles` downloads `https://cdn.jsdelivr.net/npm/basecoat-css@1/dist/basecoat.cdn.min.css`
+  (pinned to the latest 1.x) on first Init and never refreshes. If
+  you need a fresh copy, delete `{cacheDir}/basecoat/styles.css` and
+  restart.
 - `ensureBasecoatJS` re-downloads `https://cdn.jsdelivr.net/npm/basecoat-css/dist/js/all.min.js`
   on every Init (the URL is unpinned so jsdelivr serves the latest).
   If the download fails it falls back to the `//go:embed`d bytes in

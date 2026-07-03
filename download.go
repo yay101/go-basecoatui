@@ -8,10 +8,17 @@ import (
 	"path/filepath"
 )
 
-// basecoatStylesURL is the canonical styles.css published by basecoat.
-// It already includes the Tailwind v4 preflight and theme layer, so
-// callers no longer need to load the @tailwindcss/browser runtime.
-const basecoatStylesURL = "https://basecoatui.com/assets/styles.css"
+// basecoatStylesURL is the jsdelivr-hosted basecoat CDN bundle. The
+// URL is pinned to @1 so jsdelivr serves the latest 1.x release —
+// basecoat's 1.0 line is the first to ship the complete bundle
+// (Tailwind v4 preflight + theme + component classes) as a single
+// CDN file. The pre-1.0 styles.css previously hosted at
+// basecoatui.com/assets/styles.css no longer exists; this URL
+// replaces it.
+//
+// It is a var (not a const) so tests can override it the same way
+// they override basecoatJSURL.
+var basecoatStylesURL = "https://cdn.jsdelivr.net/npm/basecoat-css@1/dist/basecoat.cdn.min.css"
 
 // basecoatJSURL is the jsdelivr-hosted basecoat runtime bundle. The
 // URL is unpinned (no @version) so jsdelivr always serves the latest
@@ -43,8 +50,9 @@ func downloadFile(url, dst string) error {
 	return err
 }
 
-// ensureBasecoatStyles downloads basecoatui.com's prebuilt styles.css
-// into {cacheDir}/basecoat/styles.css if it isn't already cached. The
+// ensureBasecoatStyles downloads basecoat's CDN bundle
+// (basecoat.cdn.min.css) from jsdelivr into
+// {cacheDir}/basecoat/styles.css if it isn't already cached. The
 // file is downloaded once and never refreshed — the library doesn't
 // track ETag or Last-Modified for it. If the cache is already
 // populated the existing copy is reused without a network call.
