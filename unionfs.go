@@ -12,11 +12,16 @@ import (
 )
 
 // Compile-time checks that UnionFS implements the standard fs interfaces
-// the FS interface in basecoat.go promises.
+// the FS interface in basecoat.go promises. The unmasked view satisfies
+// the same read-only interfaces.
 var (
 	_ fs.FS        = (*UnionFS)(nil)
 	_ fs.ReadDirFS = (*UnionFS)(nil)
 	_ fs.StatFS    = (*UnionFS)(nil)
+
+	_ fs.FS        = (*unmaskedFS)(nil)
+	_ fs.ReadDirFS = (*unmaskedFS)(nil)
+	_ fs.StatFS    = (*unmaskedFS)(nil)
 )
 
 // UnionFS implements fs.FS by layering multiple source filesystems and
@@ -141,6 +146,15 @@ func (u *UnionFS) snapshotSources() []sourceFS {
 // rejects anything inside the reserved basecoat/ namespace, and
 // delegates everything else to the underlying source filesystems.
 func (u *UnionFS) Open(name string) (fs.File, error) {
+	return u.openWith(name, true)
+}
+
+// openWith is the masked-aware core of Open. When mask is true the
+// reserved basecoat/ namespace is hidden (the default, public view);
+// when mask is false it resolves to real user content (the view
+// returned by Unmasked). The two virtual files at the root
+// (basecoat.css, basecoat.js) always resolve regardless of mask.
+func (u *UnionFS) openWith(name string, mask bool) (fs.File, error) {
 	if name == "basecoat.css" {
 		u.mu.RLock()
 		data := u.cssData
@@ -153,7 +167,7 @@ func (u *UnionFS) Open(name string) (fs.File, error) {
 		u.mu.RUnlock()
 		return newVirtualFile("basecoat.js", data), nil
 	}
-	if masked(name) {
+	if mask && masked(name) {
 		return nil, fs.ErrNotExist
 	}
 	sources := u.snapshotSources()
@@ -164,7 +178,7 @@ func (u *UnionFS) Open(name string) (fs.File, error) {
 		}
 	}
 	if name == "." {
-		return u.openRootDir()
+		return u.openRootDirWith(sources, mask)
 	}
 	return nil, fs.ErrNotExist
 }
@@ -174,12 +188,20 @@ func (u *UnionFS) Open(name string) (fs.File, error) {
 // inside the reserved basecoat/ namespace.
 func (u *UnionFS) openRootDir() (fs.File, error) {
 	sources := u.snapshotSources()
+	return u.openRootDirWith(sources, true)
+}
+
+// openRootDirWith is the masked-aware core of openRootDir. When mask is
+// true the reserved basecoat/ namespace is dropped from the root
+// listing; when mask is false it is included so an unmasked view can
+// enumerate the user's basecoat/ subtree.
+func (u *UnionFS) openRootDirWith(sources []sourceFS, mask bool) (fs.File, error) {
 	u.mu.RLock()
 	cssData := u.cssData
 	jsData := u.jsData
 	u.mu.RUnlock()
 
-	entries := mergeDirEntries(sources, ".", true)
+	entries := mergeDirEntries(sources, ".", mask)
 	// Append the two virtual files. Use a synthetic dirEntry with
 	// pre-built FileInfo so Stat-via-Info returns the right size.
 	entries = append(entries,
@@ -235,8 +257,15 @@ func mergeDirEntries(sources []sourceFS, name string, mask bool) []fs.DirEntry {
 // it opens the directory on each source and merges the resulting
 // listings, first-match-wins on name.
 func (u *UnionFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	return u.readDirWith(name, true)
+}
+
+// readDirWith is the masked-aware core of ReadDir. When mask is true
+// the reserved basecoat/ namespace is hidden; when mask is false it is
+// enumerable, so an unmasked view can list the user's basecoat/ tree.
+func (u *UnionFS) readDirWith(name string, mask bool) ([]fs.DirEntry, error) {
 	if name == "." {
-		f, err := u.openRootDir()
+		f, err := u.openRootDirWith(u.snapshotSources(), mask)
 		if err != nil {
 			return nil, err
 		}
@@ -247,7 +276,7 @@ func (u *UnionFS) ReadDir(name string) ([]fs.DirEntry, error) {
 		}
 		return d.ReadDir(-1)
 	}
-	if masked(name) {
+	if mask && masked(name) {
 		return nil, fs.ErrNotExist
 	}
 	sources := u.snapshotSources()
@@ -296,6 +325,13 @@ func dirExistsAnywhere(sources []sourceFS, name string) bool {
 // the two virtual files and for ".", masks anything inside basecoat/,
 // and otherwise delegates to the first source that has the file.
 func (u *UnionFS) Stat(name string) (fs.FileInfo, error) {
+	return u.statWith(name, true)
+}
+
+// statWith is the masked-aware core of Stat. When mask is true the
+// reserved basecoat/ namespace is hidden; when mask is false the
+// unmasked view can stat user files under basecoat/.
+func (u *UnionFS) statWith(name string, mask bool) (fs.FileInfo, error) {
 	switch name {
 	case ".":
 		return &virtualDirInfo{}, nil
@@ -310,15 +346,56 @@ func (u *UnionFS) Stat(name string) (fs.FileInfo, error) {
 		u.mu.RUnlock()
 		return &virtualFileInfo{name: name, size: size, mod: time.Now()}, nil
 	}
-	if masked(name) {
+	if mask && masked(name) {
 		return nil, fs.ErrNotExist
 	}
-	f, err := u.Open(name)
+	f, err := u.openWith(name, mask)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 	return f.Stat()
+}
+
+// Unmasked returns an fs.FS, fs.ReadDirFS, and fs.StatFS view of the
+// same union that does NOT mask the reserved basecoat/ namespace. Use
+// it for template.ParseFS when you want globs like
+// "basecoat/html/*.html" to find fragments that the masked UnionFS
+// hides from serving.
+//
+// The view shares the underlying sources and the regenerated
+// basecoat.css / basecoat.js data with u: Reload, AddSource, and
+// RemoveSource on u apply to the unmasked view too. The view is read-
+// only — it has no Reload/AddSource/RemoveSource/Close of its own; call
+// those on the parent UnionFS. The two virtual files at the root
+// (basecoat.css, basecoat.js) still resolve on the unmasked view.
+//
+// Callers that mount the FS over HTTP should keep using the masked
+// UnionFS for the file server and reserve /basecoat/ at the routing
+// layer; the unmasked view is intended for in-process template parsing
+// only, not for serving.
+func (u *UnionFS) Unmasked() fs.FS {
+	return &unmaskedFS{u: u}
+}
+
+// unmaskedFS is a read-only view over a *UnionFS that does not apply
+// the reserved basecoat/ namespace mask. It satisfies fs.FS,
+// fs.ReadDirFS, and fs.StatFS by forwarding to the masked-aware cores
+// with mask=false.
+type unmaskedFS struct {
+	u *UnionFS
+}
+
+func (v *unmaskedFS) Open(name string) (fs.File, error) {
+	return v.u.openWith(name, false)
+}
+
+func (v *unmaskedFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	return v.u.readDirWith(name, false)
+}
+
+func (v *unmaskedFS) Stat(name string) (fs.FileInfo, error) {
+	return v.u.statWith(name, false)
 }
 
 // AddSource registers src under name as a full source: its files are

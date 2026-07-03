@@ -853,3 +853,207 @@ func swapDownloadTimeout(d time.Duration) {
 	// Can't assign a const, so re-export via the var-backed client.
 	httpClient.Timeout = d
 }
+
+// ---------------------------------------------------------------------------
+// Unmasked view: same union, but basecoat/ paths resolve to real user
+// content. Used for template.ParseFS when fragments live under
+// basecoat/html/.
+// ---------------------------------------------------------------------------
+
+func TestUnionFS_Unmasked_OpensBasecoatPaths(t *testing.T) {
+	u := newTestUnionFS()
+	u.AddSource("a", fstest.MapFS{
+		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte("<p>fragment</p>")},
+		"basecoat/css/app.css":    &fstest.MapFile{Data: []byte(".a{}")},
+		"index.html":              &fstest.MapFile{Data: []byte("<html></html>")},
+	})
+	u.Reload()
+
+	v := u.Unmasked()
+
+	// The masked UnionFS hides basecoat/...
+	if _, err := u.Open("basecoat/html/frag.html"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("masked Open(basecoat/html/frag.html): got %v, want fs.ErrNotExist", err)
+	}
+
+	// The unmasked view resolves the same path.
+	f, err := v.Open("basecoat/html/frag.html")
+	if err != nil {
+		t.Fatalf("unmasked Open(basecoat/html/frag.html): %v", err)
+	}
+	defer f.Close()
+	data, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "<p>fragment</p>" {
+		t.Errorf("unmasked fragment: got %q, want %q", data, "<p>fragment</p>")
+	}
+
+	// The two virtual files still resolve on the unmasked view.
+	if _, err := v.Open("basecoat.css"); err != nil {
+		t.Errorf("unmasked Open(basecoat.css): %v", err)
+	}
+	if _, err := v.Open("basecoat.js"); err != nil {
+		t.Errorf("unmasked Open(basecoat.js): %v", err)
+	}
+
+	// Non-reserved paths still resolve on both views.
+	if _, err := v.Open("index.html"); err != nil {
+		t.Errorf("unmasked Open(index.html): %v", err)
+	}
+}
+
+func TestUnionFS_Unmasked_ReadDirListsBasecoat(t *testing.T) {
+	u := newTestUnionFS()
+	u.AddSource("a", fstest.MapFS{
+		"basecoat/":               &fstest.MapFile{Mode: fs.ModeDir},
+		"basecoat/html/":          &fstest.MapFile{Mode: fs.ModeDir},
+		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte("frag")},
+		"index.html":              &fstest.MapFile{Data: []byte("<html></html>")},
+	})
+	u.Reload()
+
+	v, ok := u.Unmasked().(fs.ReadDirFS)
+	if !ok {
+		t.Fatal("Unmasked() does not satisfy fs.ReadDirFS")
+	}
+
+	// Root listing on the masked UnionFS must not include "basecoat".
+	entries, err := u.ReadDir(".")
+	if err != nil {
+		t.Fatalf("masked ReadDir(.): %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() == "basecoat" {
+			t.Error("masked ReadDir(.) leaked 'basecoat'")
+		}
+	}
+
+	// Root listing on the unmasked view must include "basecoat".
+	entries, err = v.ReadDir(".")
+	if err != nil {
+		t.Fatalf("unmasked ReadDir(.): %v", err)
+	}
+	var sawBasecoat bool
+	for _, e := range entries {
+		if e.Name() == "basecoat" {
+			sawBasecoat = true
+			if !e.IsDir() {
+				t.Error("unmasked 'basecoat' entry is not a dir")
+			}
+		}
+	}
+	if !sawBasecoat {
+		t.Error("unmasked ReadDir(.) missing 'basecoat'")
+	}
+
+	// Subdir listing under basecoat/html works on the unmasked view.
+	entries, err = v.ReadDir("basecoat/html")
+	if err != nil {
+		t.Fatalf("unmasked ReadDir(basecoat/html): %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "frag.html" {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("unmasked ReadDir(basecoat/html): got %v, want [frag.html]", names)
+	}
+
+	// Masked ReadDir of the same path still returns ErrNotExist.
+	if _, err := u.ReadDir("basecoat/html"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("masked ReadDir(basecoat/html): got %v, want fs.ErrNotExist", err)
+	}
+}
+
+func TestUnionFS_Unmasked_StatBasecoatPaths(t *testing.T) {
+	u := newTestUnionFS()
+	u.AddSource("a", fstest.MapFS{
+		"basecoat/html/frag.html": &fstest.MapFile{Data: []byte("<p>fragment</p>")},
+	})
+	u.Reload()
+
+	v, ok := u.Unmasked().(fs.StatFS)
+	if !ok {
+		t.Fatal("Unmasked() does not satisfy fs.StatFS")
+	}
+
+	// Masked Stat of a reserved path is ErrNotExist.
+	if _, err := u.Stat("basecoat/html/frag.html"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("masked Stat(basecoat/html/frag.html): got %v, want fs.ErrNotExist", err)
+	}
+
+	// Unmasked Stat resolves it.
+	info, err := v.Stat("basecoat/html/frag.html")
+	if err != nil {
+		t.Fatalf("unmasked Stat(basecoat/html/frag.html): %v", err)
+	}
+	if info.IsDir() {
+		t.Error("unmasked Stat(basecoat/html/frag.html).IsDir = true, want false")
+	}
+	if info.Name() != "frag.html" {
+		t.Errorf("unmasked Stat name: got %q, want frag.html", info.Name())
+	}
+
+	// Virtual files still stat on the unmasked view.
+	info, err = v.Stat("basecoat.css")
+	if err != nil {
+		t.Fatalf("unmasked Stat(basecoat.css): %v", err)
+	}
+	if info.IsDir() {
+		t.Error("unmasked Stat(basecoat.css).IsDir = true, want false")
+	}
+}
+
+func TestUnionFS_Unmasked_SharesReloadOutput(t *testing.T) {
+	u := newTestUnionFS()
+	u.AddSource("a", fstest.MapFS{
+		"basecoat/css/a.css": &fstest.MapFile{Data: []byte(".a{padding:1rem;}")},
+	})
+	u.Reload()
+
+	v := u.Unmasked()
+
+	before, _ := readVirtual(t, u, "basecoat.css")
+	got, err := v.Open("basecoat.css")
+	if err != nil {
+		t.Fatalf("unmasked Open(basecoat.css): %v", err)
+	}
+	body, _ := io.ReadAll(got)
+	got.Close()
+	if !bytes.Equal(before, body) {
+		t.Error("unmasked view did not return the same basecoat.css bytes as the masked UnionFS")
+	}
+
+	// Add another source and Reload — the unmasked view must see the
+	// new bytes without being re-created.
+	u.AddSource("b", fstest.MapFS{
+		"basecoat/css/b.css": &fstest.MapFile{Data: []byte(".b{padding:2rem;}")},
+	})
+	u.Reload()
+
+	after, _ := readVirtual(t, u, "basecoat.css")
+	got, err = v.Open("basecoat.css")
+	if err != nil {
+		t.Fatalf("unmasked Open(basecoat.css) after Reload: %v", err)
+	}
+	body, _ = io.ReadAll(got)
+	got.Close()
+	if !bytes.Equal(after, body) {
+		t.Error("unmasked view did not reflect Reload on the parent UnionFS")
+	}
+	if bytes.Equal(before, after) {
+		t.Error("Reload did not change basecoat.css")
+	}
+}
+
+func TestUnionFS_Unmasked_SatisfiesInterfaces(t *testing.T) {
+	v := newTestUnionFS().Unmasked()
+	if _, ok := v.(fs.ReadDirFS); !ok {
+		t.Error("unmasked view does not satisfy fs.ReadDirFS")
+	}
+	if _, ok := v.(fs.StatFS); !ok {
+		t.Error("unmasked view does not satisfy fs.StatFS")
+	}
+}

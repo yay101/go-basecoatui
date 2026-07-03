@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"io/fs"
 	"log"
 	"net/http"
 	"sync"
@@ -26,15 +25,15 @@ func main() {
 	// the latest basecoat.js runtime from jsdelivr. basecoat.css already includes the Tailwind v4 preflight and
 	// theme layer, so no Tailwind browser script is needed.
 	//
-	// We keep references to the raw source fs.FS values we hand to
-	// Init so the index handler can glob them directly for fragments
-	// — fragments live under each source's basecoat/html/ tree, which
-	// the library masks out of the union FS so they never appear at a
-	// URL. To still pick them up via template.ParseFS we walk the raw
-	// source instead.
-	publicFS := basecoat.Watch("./public")
-	elementsFS := basecoat.Watch("./elements")
-	ufs, err := basecoat.Init("./cache", publicFS, elementsFS)
+	// Fragments live under each source's basecoat/html/ tree, which
+	// the masked UnionFS hides from serving so they never appear at a
+	// URL. To pick them up via template.ParseFS we parse templates
+	// against ufs.Unmasked(), an unmasked view of the same union that
+	// resolves basecoat/... paths to real user content.
+	ufs, err := basecoat.Init("./cache",
+		basecoat.Watch("./public"),
+		basecoat.Watch("./elements"),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -47,7 +46,7 @@ func main() {
 	mux.HandleFunc("POST /api/chat", handleChat)
 	mux.HandleFunc("POST /api/create-account", handleCreateAccount)
 	mux.HandleFunc("POST /api/report-issue", handleReportIssue)
-	mux.HandleFunc("GET /{$}", handleIndex(ufs, elementsFS))
+	mux.HandleFunc("GET /{$}", handleIndex(ufs))
 	// /basecoat/ is the reserved namespace — any request to it that
 	// wasn't served as the two virtual files at the root (/basecoat.css
 	// and /basecoat.js) must 404. The file server below still serves
@@ -59,35 +58,21 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", mux))
 }
 
-// handleIndex renders the SPA shell. The page is parsed out of the
-// union FS (which masks the reserved basecoat/ namespace) and the
-// fragments are parsed out of the elements source's raw fs.FS using a
-// second glob. The two are composed by re-parsing the fragment files
-// into the page template so the page's {{template "name" .}} lookups
-// resolve. The result is cached behind a sync.Once and invalidated by
-// the next Reload (which the poll watcher triggers on file changes).
-func handleIndex(ufs basecoat.FS, elementsFS fs.FS) http.HandlerFunc {
-	const (
-		pageGlob = "**/*.html"
-		fragGlob = "basecoat/html/*.html"
-	)
+// handleIndex renders the SPA shell. The page and fragments are parsed
+// from ufs.Unmasked() — an unmasked view of the union FS that resolves
+// basecoat/... paths to real user content, so a single
+// template.ParseFS("basecoat/html/*.html") glob picks up the fragments
+// the masked UnionFS hides from serving. The result is cached behind a
+// sync.Once and invalidated by the next Reload (which the poll watcher
+// triggers on file changes).
+func handleIndex(ufs basecoat.FS) http.HandlerFunc {
 	var (
 		once     sync.Once
 		parsed   *template.Template
 		parseErr error
 	)
 	load := func() {
-		// Page from the union FS (excludes basecoat/...).
-		pageTmpl, err := template.ParseFS(ufs, pageGlob)
-		if err != nil {
-			parseErr = err
-			return
-		}
-		// Fragments from the elements source's raw fs.FS — this is
-		// the bit that uses template.ParseFS with another glob. The
-		// fragment files live under basecoat/html/ which the union
-		// FS masks, but the raw source still has them.
-		parsed, parseErr = composeWithFragments(pageTmpl, elementsFS, fragGlob)
+		parsed, parseErr = template.ParseFS(ufs.Unmasked(), "**/*.html")
 	}
 	funcs := template.FuncMap{
 		"dict": dict,
@@ -111,32 +96,6 @@ func handleIndex(ufs basecoat.FS, elementsFS fs.FS) http.HandlerFunc {
 			log.Printf("template execute: %v", err)
 		}
 	}
-}
-
-// composeWithFragments returns pageTmpl with the fragment files
-// matched by fragGlob re-parsed into it, so {{template "name" .}}
-// lookups in the page resolve. html/template has no t.ParseFS, so we
-// read each matched file and call t.Parse on the body.
-func composeWithFragments(pageTmpl *template.Template, fragmentsFS fs.FS, fragGlob string) (*template.Template, error) {
-	matches, err := fs.Glob(fragmentsFS, fragGlob)
-	if err != nil {
-		return nil, err
-	}
-	for _, match := range matches {
-		f, err := fragmentsFS.Open(match)
-		if err != nil {
-			return nil, err
-		}
-		data, err := io.ReadAll(f)
-		f.Close()
-		if err != nil {
-			return nil, err
-		}
-		if pageTmpl, err = pageTmpl.Parse(string(data)); err != nil {
-			return nil, err
-		}
-	}
-	return pageTmpl, nil
 }
 
 // dict builds a map[string]any from alternating key/value pairs, for

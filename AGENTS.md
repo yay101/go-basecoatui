@@ -80,7 +80,7 @@ go run ./cmd/basecoat --mode=child \
 | File | Responsibility |
 |---|---|
 | `basecoat.go` | Package entry. `FS` interface, `Init` (parent), `InitChild`, `Watch()`, `Mask()`, `Static` config, `//go:embed` basecoat runtime fallback. |
-| `unionfs.go` | `UnionFS` (`fs.FS` + `fs.ReadDirFS` + `fs.StatFS` impl), virtual file/dir types, `Reload` (atomic swap under write lock), `ReadDir`/`Stat`, `basecoat/` namespace masking, `snapshotSources` helper, `Close()`. |
+| `unionfs.go` | `UnionFS` (`fs.FS` + `fs.ReadDirFS` + `fs.StatFS` impl), virtual file/dir types, `Reload` (atomic swap under write lock), `ReadDir`/`Stat`, `basecoat/` namespace masking, `Unmasked()` read-only view, `snapshotSources` helper, `Close()`. |
 | `watcher.go` | `watchSource` (mod-time map), 2-second `pollWatcher` goroutine. |
 | `download.go` | `downloadFile`, `ensureBasecoatStyles` (download-once), `ensureBasecoatJS` (always-download with cache fallback), `httpClient`, sentinel errors (`ErrStylesDownload`, `ErrJSDownload`). |
 | `generate.go` | `generateCSS`, `generateJS`, `walkExt`. |
@@ -103,6 +103,7 @@ When you change behaviour, these are the symbols callers depend on:
 - `(FS).AddSource(name string, src fs.FS)` — hot-add a full source at runtime (served + contributes to generation)
 - `(FS).RemoveSource(name string) bool` — hot-remove a source; returns false if no such name
 - `(FS).Reload()` — rebuild `basecoat.css` and `basecoat.js` from the current set of sources
+- `(FS).Unmasked() fs.FS` — read-only view of the same union that does NOT mask the reserved `basecoat/` namespace. Satisfies `fs.FS`, `fs.ReadDirFS`, `fs.StatFS`. Shares sources and regenerated CSS/JS with the parent; mutation methods (`Reload`/`AddSource`/`RemoveSource`/`Close`) are on the parent only. Use for `template.ParseFS` to pick up fragments under `basecoat/html/`; keep using the masked `UnionFS` for HTTP serving.
 - `(FS).Close() error`
 - `*UnionFS` is still exported as the concrete implementation; tests and power users can type-assert/declare it directly
 - Package vars: `Static`
@@ -126,7 +127,8 @@ parent has already loaded the shim), so child mode does not append it.
   `__lifecycle` guard).
 
 Internal but worth knowing: `sourceFS`, `sourceRef`, `virtualFile`,
-`virtualDir`, `pollWatcher`, `watchSource`, `watchableRoot`, `masked`,
+`virtualDir`, `unmaskedFS`, `pollWatcher`, `watchSource`, `watchableRoot`,
+`masked`, `openWith`, `readDirWith`, `statWith`, `openRootDirWith`,
 `walkExt`, `snapshotSources`, `newUnionFS`, `EmbeddedBasecoatJS`,
 `basecoatJSURL`, `basecoatStylesURL`, `httpClient`, `downloadTimeout`,
 `lifecycleJS`, `lifecycleShim`.
@@ -152,12 +154,15 @@ Internal but worth knowing: `sourceFS`, `sourceRef`, `virtualFile`,
   a deep copy of the sources slice so `Open`/`ReadDir` can iterate
   without racing `AddSource`/`RemoveSource`.
 - **Reserved namespace.** Any path that is `basecoat` or starts with
-  `basecoat/` is masked at the `Open`/`ReadDir`/`Stat` layer. User
-  files at those paths never resolve through the union FS; only the
-  two virtual files at the root (`basecoat.css`, `basecoat.js`)
-  survive. Internal operations (`generateCSS`, `generateJS`) walk the
-  raw sources directly so they can read `basecoat/{css,js}/...`
-  without being blocked by the mask.
+  `basecoat/` is masked at the `Open`/`ReadDir`/`Stat` layer of the
+  public `UnionFS`. User files at those paths never resolve through
+  the served FS; only the two virtual files at the root
+  (`basecoat.css`, `basecoat.js`) survive. Internal operations
+  (`generateCSS`, `generateJS`) walk the raw sources directly so they
+  can read `basecoat/{css,js}/...` without being blocked by the mask.
+  Callers that want to glob `basecoat/...` for in-process template
+  parsing use `Unmasked()` — a read-only view of the same union that
+  does not apply the mask (see "Fragments in a reserved folder").
 
 ## Source layout
 
@@ -173,21 +178,21 @@ union FS.
 └── basecoat/                       # reserved namespace — masked at Open/ReadDir
     ├── css/**/*.css                # merged into basecoat.css (recursive)
     ├── js/**/*.js                  # appended to basecoat.js (parent: after runtime; child: alone)
-    └── html/**/*.html              # NOT served; access via the raw source fs.FS for fragments
+    └── html/**/*.html              # NOT served; access via Unmasked() for template parsing
 ```
 
 | File pattern | What it does |
 |---|---|
 | `basecoat/css/**/*.css` (recursive) | Concatenated into `basecoat.css` and minified (parent: after the downloaded styles; child: alone) |
 | `basecoat/js/**/*.js` (recursive) | Appended to `basecoat.js` (parent: after the embedded runtime; child: alone) |
-| `basecoat/html/**/*.html` (recursive) | Masked at the union FS. Use the raw source `fs.FS` (saved before being passed to `Init`) to glob fragments with a second `template.ParseFS` call. |
+| `basecoat/html/**/*.html` (recursive) | Masked at the union FS. Glob fragments via `ufs.Unmasked()` with a `template.ParseFS` call. |
 | anything else | Served verbatim through the union FS. Use this for HTML, images, etc. |
 
 Anything under `basecoat/...` is masked at the `Open` / `ReadDir` /
 `Stat` layer. If you want `template.ParseFS(ufs, "**/*.html")` to find
-your HTML files (including fragments), put them outside `basecoat/`,
-or use the raw source `fs.FS` you passed to `Init` for a second
-`template.ParseFS` call (see "Fragments in a reserved folder" above).
+your HTML files (including fragments), either put them outside
+`basecoat/`, or parse against `ufs.Unmasked()` (see "Fragments in a
+reserved folder" below).
 The library walks `basecoat/css/` and `basecoat/js/` directly via the
 raw source FS during generation, so the mask doesn't apply there.
 
@@ -229,20 +234,41 @@ doesn't hide them.
 ### Fragments in a reserved folder
 
 If you want to keep fragments under each source's `basecoat/html/...`
-tree (for organisation, so they never appear at a URL), they're
-masked out of the union FS — the glob above won't find them. Use the
-raw source `fs.FS` you passed to `Init` for a second `ParseFS` call,
-then re-parse the fragment files into the page template so the page's
-`{{template "name" .}}` lookups resolve:
+tree (for organisation, so they never appear at a URL), they're masked
+out of the served union FS — a plain `template.ParseFS(ufs, ...)`
+won't find them. Use `ufs.Unmasked()`, a read-only view of the same
+union that does not apply the `basecoat/` mask. A single glob then
+picks up pages (outside `basecoat/`) and fragments (under
+`basecoat/html/`) together, so `{{template "name" .}}` lookups in the
+page resolve without a second parse pass:
+
+```go
+ufs, _ := basecoat.Init("./cache", basecoat.Watch("./elements"))
+
+// One glob against the unmasked view finds pages AND fragments.
+t, _ := template.ParseFS(ufs.Unmasked(), "**/*.html")
+_ = t.Execute(w, data)
+```
+
+`Unmasked()` shares the underlying sources and regenerated
+`basecoat.css` / `basecoat.js` with the parent `UnionFS` — `Reload`,
+`AddSource`, and `RemoveSource` on the parent apply to the view too.
+The view satisfies `fs.FS`, `fs.ReadDirFS`, and `fs.StatFS` but is
+read-only; call mutation methods on the parent. Keep using the masked
+`UnionFS` for the HTTP file server and reserve `/basecoat/` at the
+routing layer — the unmasked view is for in-process template parsing
+only, not for serving.
+
+The pre-`Unmasked()` workaround (keep the raw source `fs.FS` you
+passed to `Init`, glob it for fragments, re-parse them into the page
+template) still works, but is no longer necessary and is kept here
+only for reference:
 
 ```go
 elementsFS := basecoat.Watch("./elements")
 ufs, _ := basecoat.Init("./cache", elementsFS)
 
-// Page from the union FS (basecoat/html/ is masked out).
 pageTmpl, _ := template.ParseFS(ufs, "**/*.html")
-
-// Fragments from the raw source — another glob, another FS.
 fragMatches, _ := fs.Glob(elementsFS, "basecoat/html/*.html")
 for _, match := range fragMatches {
     f, _ := elementsFS.Open(match)
@@ -253,13 +279,15 @@ for _, match := range fragMatches {
 _ = pageTmpl.Execute(w, data)
 ```
 
-The same pattern works per-source in a multi-source setup: each
-source's raw `fs.FS` (saved before being passed to `Init`) is the
-view onto that source's `basecoat/...` subtree. Compose as many
-fragment globs as you need. The page and the fragments don't share a
-namespace in the union FS, so two sources can each define a fragment
-named `card.html` at the same path and each page picks up only its
-own.
+The same pattern works per-source in a multi-source setup with the
+raw-FS workaround above: each source's raw `fs.FS` (saved before being
+passed to `Init`) is the view onto that source's `basecoat/...`
+subtree. Compose as many fragment globs as you need. The page and the
+fragments don't share a namespace in the union FS, so two sources can
+each define a fragment named `card.html` at the same path and each
+page picks up only its own. (With `Unmasked()` the union namespace is
+shared, so same-named fragments across sources collide — first-match-
+wins, same as `Open`.)
 
 ### Render one source in isolation (parent mode)
 
@@ -376,8 +404,9 @@ Semantics worth knowing:
 - Cache layout is `{cacheDir}/basecoat/{styles.css,basecoat.js}`. Changing
   this shape will invalidate every existing user's cache.
 - HTML files inside `basecoat/...` are masked from `Open` / `ReadDir` /
-  `Stat` (and from `template.ParseFS(ufs, "**/*.html")` globs). If you
-  want the glob to find them, put them outside `basecoat/`.
+  `Stat` (and from `template.ParseFS(ufs, "**/*.html")` globs). To find
+  them with a glob, either put them outside `basecoat/`, or parse
+  against `ufs.Unmasked()` (see "Fragments in a reserved folder").
 - Callers that mount the FS over HTTP should add
   `mux.Handle("/basecoat/", http.NotFoundHandler())` so anything that
   isn't the two virtual files at the root 404s explicitly at the

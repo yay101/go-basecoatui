@@ -154,7 +154,7 @@ runtime plus every `basecoat/js/**/*.js` across all sources — minified.
 If you'd rather keep fragments under a reserved `basecoat/html/`
 folder (so they never appear at a URL), they're masked from the
 union FS — see "Fragments in a reserved folder" below for the
-two-glob pattern.
+`Unmasked()` pattern.
 
 ## Templates
 
@@ -217,10 +217,35 @@ fragments in their own namespace.
 
 If you want to keep fragments under each source's `basecoat/html/...`
 tree (for organisation, so they never appear at a URL), they're
-masked out of the union FS — the glob above won't find them. Use the
-raw source `fs.FS` you passed to `Init` for a second `ParseFS` call,
-then re-parse the fragment files into the page template so the page's
-`{{template "name" .}}` lookups resolve:
+masked out of the served union FS — a plain `template.ParseFS(ufs,
+"**/*.html")` won't find them. Use `ufs.Unmasked()`, a read-only view
+of the same union that does not apply the `basecoat/` mask. A single
+glob then picks up pages (outside `basecoat/`) and fragments (under
+`basecoat/html/`) together, so `{{template "name" .}}` lookups in the
+page resolve without a second parse pass:
+
+```go
+ufs, _ := basecoat.Init("./cache", basecoat.Watch("./elements"))
+
+// One glob against the unmasked view finds pages AND fragments.
+t, err := template.ParseFS(ufs.Unmasked(), "**/*.html")
+if err != nil { /* ... */ }
+_ = t.Execute(w, data)
+```
+
+`Unmasked()` shares the underlying sources and regenerated
+`basecoat.css` / `basecoat.js` with the parent `UnionFS` — `Reload`,
+`AddSource`, and `RemoveSource` on the parent apply to the view too.
+The view satisfies `fs.FS`, `fs.ReadDirFS`, and `fs.StatFS` but is
+read-only; call mutation methods on the parent. Keep using the masked
+`UnionFS` for the HTTP file server and reserve `/basecoat/` at the
+routing layer — the unmasked view is for in-process template parsing
+only, not for serving.
+
+The pre-`Unmasked()` workaround (keep the raw source `fs.FS` you
+passed to `Init`, glob it for fragments, re-parse them into the page
+template) still works, but is no longer necessary and is kept here
+only for reference:
 
 ```go
 elementsFS := basecoat.Watch("./elements")
@@ -243,13 +268,14 @@ for _, match := range fragMatches {
 _ = pageTmpl.Execute(w, data)
 ```
 
-The same pattern works per-source in a multi-source setup: each
-source's raw `fs.FS` (saved before being passed to `Init`) is the
-view onto that source's `basecoat/...` subtree. Compose as many
-fragment globs as you need. The page and the fragments don't share a
-namespace in the union FS, so two sources can each define a
-fragment named `card.html` at the same path and each page picks up
-only its own.
+The same per-source pattern works in a multi-source setup with the
+raw-FS workaround above: each source's raw `fs.FS` (saved before being
+passed to `Init`) is the view onto that source's `basecoat/...`
+subtree. The page and the fragments don't share a namespace in the
+union FS, so two sources can each define a fragment named
+`card.html` at the same path and each page picks up only its own.
+(With `Unmasked()` the union namespace is shared, so same-named
+fragments across sources collide — first-match-wins, same as `Open`.)
 
 ## Parent vs child (SPA pattern)
 

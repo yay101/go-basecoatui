@@ -87,6 +87,20 @@ type FS interface {
 	// false if no such source was registered.
 	RemoveSource(name string) bool
 
+	// Unmasked returns an fs.FS view of the same union that does NOT
+	// mask the reserved basecoat/ namespace. Use it for
+	// template.ParseFS when you want globs like
+	// "basecoat/html/*.html" to find fragments the masked UnionFS
+	// hides from serving. The view satisfies fs.FS, fs.ReadDirFS,
+	// and fs.StatFS. It shares the underlying sources and regenerated
+	// basecoat.css / basecoat.js with the parent: Reload, AddSource,
+	// and RemoveSource on the parent apply to the view too. The view
+	// is read-only — call mutation methods on the parent UnionFS.
+	// Callers that mount over HTTP should keep using the masked
+	// UnionFS for the file server; the unmasked view is for in-
+	// process template parsing only.
+	Unmasked() fs.FS
+
 	// Close stops the poll watcher goroutine.
 	Close() error
 }
