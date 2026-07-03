@@ -91,7 +91,11 @@ preflight and theme layer:
    on every `Init`). The `//go:embed`d runtime in
    `basecoatui/v0.3.11/basecoat.js` is used as a fallback when the
    network is down.
-2. Every `basecoat/js/**/*.js` across your sources, in source order,
+2. The **lifecycle shim** (`lifecycle.js`, embedded via
+   `lifecycle.go`) that wraps `basecoat.register` with an optional
+   `destroy(el)` and adds `basecoat.destroy` / `destroyAll` /
+   `unregister`. Parent mode only — see "Component lifecycle (destroy)".
+3. Every `basecoat/js/**/*.js` across your sources, in source order,
    recursively. Concatenated and minified.
 
 There is no tree-shaking. The prebuilt bundle is small enough that
@@ -289,7 +293,7 @@ reloadable.
 The embedded runtime provides a [basecoat](https://basecoat.dev) compatible API:
 
 ```js
-window.basecoat.register(name, selector, initFn)
+window.basecoat.register(name, selector, initFn, destroyFn?)   // destroyFn optional — see "Component lifecycle (destroy)"
 window.basecoat.init(name)
 window.basecoat.initAll()
 window.basecoat.start()
@@ -323,6 +327,68 @@ In child mode, the `basecoat.js` you emit contains only your user JS —
 the runtime is already loaded by the parent. The user JS still calls
 `basecoat.register()` exactly the same way; it just relies on
 `window.basecoat` being on the page by the time it runs.
+
+## Component lifecycle (destroy)
+
+The parent bundle appends a small **lifecycle shim** (`lifecycle.js`,
+embedded via `lifecycle.go`) right after the upstream basecoat runtime.
+It wraps `window.basecoat.register` to accept an optional fourth
+argument — a `destroy(el)` teardown callback — and adds a few helpers
+so SPA shells can clean up a page's components before swapping
+`innerHTML` (stopping intervals, aborting fetches, dropping listeners
+on detached DOM). Child bundles do not append the shim: the parent
+page has already loaded it onto `window.basecoat`, and the child's
+`register(...)` calls hit the wrapped function automatically.
+
+The shim is idempotent (guarded by `window.basecoat.__lifecycle`), so
+loading it twice — including a stray copy in a child bundle — is
+harmless but wasteful.
+
+```js
+basecoat.register(name, selector, init, destroy?)   // 4th arg optional
+basecoat.destroy(el)        // run destroy(el) for every initialised
+                            //   component whose root is el or inside el,
+                            //   then clear the data-<name>-initialized marker
+basecoat.destroyAll(root)  // sugar for destroy(root || document.body)
+basecoat.unregister(name)  // stop calling destroy for name (init still runs)
+```
+
+Omit `destroy` for components with no teardown needs — existing
+`register(name, selector, init)` calls keep working unchanged. A
+component that starts a poller, for example:
+
+```js
+basecoat.register(
+  'logs-system-page',
+  '[data-logs-system-page]:not([data-logs-system-page-initialized])',
+  function (el) {
+    el.setAttribute('data-logs-system-page-initialized', 'true');
+    var timer = setInterval(refresh, 10000);   // capture in this closure
+    // remember the handle so destroy can clear it
+    el.__logsTimer = timer;
+  },
+  function (el) {                              // destroy
+    if (el.__logsTimer) { clearInterval(el.__logsTimer); el.__logsTimer = null; }
+  }
+);
+```
+
+Then in the SPA shell, before an `innerHTML` swap:
+
+```js
+if (window.basecoat && window.basecoat.destroyAll) {
+  try { window.basecoat.destroyAll(main); } catch (_e) {}
+}
+main.innerHTML = html;
+basecoat.initAll();   // re-init the freshly inserted tree
+```
+
+`destroy(el)` walks every registered component, finds initialised
+elements at or beneath `el`, runs the matching `destroy(el)` (soft-failed
+per component), then removes the `data-<name>-initialized` marker so a
+later `initAll()` re-runs `init` cleanly. SSR/MPA sites need none of
+this — the browser tears everything down on navigation, and the
+`destroy` arg is optional.
 
 ## Hot-swap sources
 
