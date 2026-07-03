@@ -92,9 +92,10 @@ layer:
 1. The basecoat.js runtime fetched from
    `https://cdn.jsdelivr.net/npm/basecoat-css/dist/js/all.min.js` (the
    URL is unpinned, so jsdelivr serves the latest published version
-   on every `Init`). The `//go:embed`d runtime in
-   `basecoatui/v0.3.11/basecoat.js` is used as a fallback when the
-   network is down.
+   on every `Init`). If the download fails, a previously cached copy
+   at `{cacheDir}/basecoat/basecoat.js` is used instead (the runtime
+   is just a version behind). If no cache exists, `Init` returns an
+   error — see "Download failures" below.
 2. The **lifecycle shim** (`lifecycle.js`, embedded via
    `lifecycle.go`) that wraps `basecoat.register` with an optional
    `destroy(el)` and adds `basecoat.destroy` / `destroyAll` /
@@ -429,6 +430,46 @@ Semantics:
   callback. `Open()` always sees the previous or next version, never a
   half-built one.
 
+## Download failures
+
+Both CDN downloads (styles + JS) use a shared `http.Client` with a
+**30-second timeout**, so a stalled or hung CDN connection surfaces as
+an error instead of blocking `Init` forever. There are no retries and
+no checksum verification.
+
+`Init` handles failures as follows:
+
+| Asset | CDN down, cache exists | CDN down, no cache |
+|---|---|---|
+| Styles (`basecoat.cdn.min.css`) | Cached copy reused, no error | **Hard error** — `ErrStylesDownload` |
+| JS runtime (`all.min.js`) | Cached copy reused, no error | **Hard error** — `ErrJSDownload` |
+
+Both sentinels are exported for `errors.Is`:
+
+```go
+import (
+    "errors"
+
+    basecoat "github.com/yay101/go-basecoatui"
+)
+
+ufs, err := basecoat.Init("./cache", basecoat.Watch("./public"))
+switch {
+case errors.Is(err, basecoat.ErrStylesDownload):
+    // styles CDN unreachable and no cached styles.css
+case errors.Is(err, basecoat.ErrJSDownload):
+    // runtime CDN unreachable and no cached basecoat.js — you can
+    // either retry, abort, or build a *UnionFS directly and pass
+    // basecoat.EmbeddedBasecoatJS as the embedded runtime.
+}
+```
+
+`Init` no longer silently falls back to the embedded runtime on a JS
+download failure — it returns the error so the caller knows. If you
+want the old "keep the server running on a stale embedded runtime"
+behaviour, construct a `*UnionFS` directly and pass
+`basecoat.EmbeddedBasecoatJS` as the `embeddedJS` argument.
+
 ## CLI
 
 The module ships with a command-line tool that generates `basecoat.css` and `basecoat.js` without running a server — useful for build pipelines and CI.
@@ -473,13 +514,20 @@ Set this before calling `Init`:
 
 ## Updating the embedded basecoat.js runtime
 
-The `//go:embed basecoatui/v0.3.11/basecoat.js` byte slice is the
-fallback used when the network download fails. The pinned version
-doesn't have to match the latest published runtime — it's a safety
-net, not the source of truth. To update it, drop the new file at
-`basecoatui/v<version>/basecoat.js` and change the embed directive in
-`basecoat.go`. The downloaded version is always the latest from
-jsdelivr; the embed is only consulted when the download fails.
+The `//go:embed basecoatui/v0.3.11/basecoat.js` byte slice
+(`basecoat.EmbeddedBasecoatJS`) is a last-resort fallback for callers
+that construct a `*UnionFS` directly when the CDN is unreachable and
+no cache exists. `Init` itself no longer uses it silently — it
+returns `ErrJSDownload` instead — but it's still exported so a caller
+can deliberately opt into a stale runtime to keep the server running
+through a CDN outage.
+
+The pinned version doesn't have to match the latest published runtime
+— it's a safety net, not the source of truth. To update it, drop the
+new file at `basecoatui/v<version>/basecoat.js` and change the embed
+directive in `basecoat.go`. The downloaded version is always the
+latest from jsdelivr; the embed is only consulted when a caller
+passes it in explicitly.
 
 ## Dependencies
 

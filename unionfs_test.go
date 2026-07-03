@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
+	"time"
 )
 
 // newTestUnionFS returns a UnionFS with no sources, no embedded JS, and
@@ -581,7 +583,7 @@ func TestGenerateJS_EmbeddedFallbackWhenJSDownloadFails(t *testing.T) {
 			"basecoat/js/a.js": &fstest.MapFile{Data: []byte("basecoat.register('a','.a',function(){});")},
 		},
 	}, writeTempFile(t, ".x{}"), "/nonexistent/runtime.js")
-	u.embeddedJS = embeddedBasecoatJS
+	u.embeddedJS = EmbeddedBasecoatJS
 	u.basecoatJSPath = ""
 	u.Reload()
 
@@ -677,4 +679,177 @@ func TestEnsureBasecoatJS_ErrorsWhenNoCacheAndCDNDown(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when network is down and no cache exists")
 	}
+	if !errors.Is(err, ErrJSDownload) {
+		t.Errorf("expected ErrJSDownload sentinel; got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ensureBasecoatStyles: download failure + sentinel.
+// ---------------------------------------------------------------------------
+
+func TestEnsureBasecoatStyles_ErrorsWhenCDNDown(t *testing.T) {
+	orig := basecoatStylesURL
+	basecoatStylesURL = "http://127.0.0.1:1/always-down"
+	t.Cleanup(func() { basecoatStylesURL = orig })
+
+	_, err := ensureBasecoatStyles(t.TempDir())
+	if err == nil {
+		t.Fatal("expected error when CDN is down and no cache exists")
+	}
+	if !errors.Is(err, ErrStylesDownload) {
+		t.Errorf("expected ErrStylesDownload sentinel; got %v", err)
+	}
+}
+
+func TestEnsureBasecoatStyles_ServesCacheWhenCDNDown(t *testing.T) {
+	cacheDir := t.TempDir()
+	cached := []byte("/* cached styles */")
+	if err := os.MkdirAll(filepath.Join(cacheDir, "basecoat"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "basecoat", "styles.css"), cached, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := basecoatStylesURL
+	basecoatStylesURL = "http://127.0.0.1:1/always-down"
+	t.Cleanup(func() { basecoatStylesURL = orig })
+
+	path, err := ensureBasecoatStyles(cacheDir)
+	if err != nil {
+		t.Fatalf("expected cache fallback to succeed; got %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(cached) {
+		t.Errorf("got %q, want %q (cached bytes)", got, cached)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Init: JS download failure must surface as an error (not be silently
+// swallowed with an embedded fallback).
+// ---------------------------------------------------------------------------
+
+func TestInit_ErrorsWhenJSDownloadFailsAndNoCache(t *testing.T) {
+	orig := basecoatJSURL
+	basecoatJSURL = "http://127.0.0.1:1/always-down"
+	t.Cleanup(func() { basecoatJSURL = orig })
+
+	// Styles needs to succeed so we reach the JS path. Pre-populate
+	// the styles cache so no network call is made for it.
+	cacheDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cacheDir, "basecoat"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "basecoat", "styles.css"), []byte("body{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Init(cacheDir)
+	if err == nil {
+		t.Fatal("expected Init to return an error when JS download fails and no cache exists")
+	}
+	if !errors.Is(err, ErrJSDownload) {
+		t.Errorf("expected ErrJSDownload sentinel; got %v", err)
+	}
+}
+
+func TestInit_SucceedsWithCachedJSWhenCDNDown(t *testing.T) {
+	orig := basecoatJSURL
+	basecoatJSURL = "http://127.0.0.1:1/always-down"
+	t.Cleanup(func() { basecoatJSURL = orig })
+
+	cacheDir := t.TempDir()
+	dir := filepath.Join(cacheDir, "basecoat")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "styles.css"), []byte("body{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "basecoat.js"), []byte("var cachedRuntime=1;"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	Static = true
+	t.Cleanup(func() { Static = false })
+
+	ufs, err := Init(cacheDir)
+	if err != nil {
+		t.Fatalf("expected Init to succeed via cache fallback; got %v", err)
+	}
+	defer ufs.Close()
+
+	f, err := ufs.Open("basecoat.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	body, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The cached runtime is minified into basecoat.js, so check for
+	// the minified form of the marker, not the original source.
+	if !strings.Contains(string(body), "cachedRuntime=1") {
+		t.Errorf("expected cached runtime in basecoat.js; got %s", body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Download timeout: a hung CDN connection must not block Init forever.
+// ---------------------------------------------------------------------------
+
+func TestDownloadFile_TimesOutOnHungServer(t *testing.T) {
+	// A server that accepts the connection but never responds. The
+	// default httpClient timeout will fire.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Hold the connection open without writing anything.
+			// The client timeout will close it from its side.
+			go func(c net.Conn) {
+				time.Sleep(60 * time.Second)
+				c.Close()
+			}(conn)
+		}
+	}()
+
+	origTimeout := downloadTimeout
+	// Use a short timeout so the test doesn't take 30s.
+	swapDownloadTimeout(100 * time.Millisecond)
+	t.Cleanup(func() { swapDownloadTimeout(origTimeout) })
+
+	dst := filepath.Join(t.TempDir(), "out", "styles.css")
+	start := time.Now()
+	err = downloadFile("http://"+ln.Addr().String()+"/hung", dst)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected downloadFile to return an error on a hung server")
+	}
+	// Should have bailed around the timeout, not waited the full 60s.
+	if elapsed > 5*time.Second {
+		t.Errorf("downloadFile took %v, expected ~timeout", elapsed)
+	}
+}
+
+// swapDownloadTimeout replaces the downloadTimeout and rebuilds the
+// shared httpClient so tests can use a tight timeout. The caller is
+// responsible for restoring the original via t.Cleanup.
+func swapDownloadTimeout(d time.Duration) {
+	// Can't assign a const, so re-export via the var-backed client.
+	httpClient.Timeout = d
 }

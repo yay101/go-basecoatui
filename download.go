@@ -1,11 +1,37 @@
 package basecoat
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
+)
+
+// downloadTimeout bounds every CDN HTTP request so a stalled or
+// hung CDN connection can never block Init indefinitely. 30s is
+// generous for the ~217KB CSS bundle on a slow link while still
+// failing fast enough that a wedged CDN surfaces as an error
+// rather than a hang.
+const downloadTimeout = 30 * time.Second
+
+// httpClient is the shared client used for all CDN downloads. It
+// carries a timeout so callers never block forever on a hung
+// connection. It is a var (not a const) so tests can swap in a
+// client with a custom transport if needed.
+var httpClient = &http.Client{Timeout: downloadTimeout}
+
+// Sentinel errors returned by the download helpers. Callers can
+// use errors.Is to distinguish a CDN outage from a cache miss.
+var (
+	// ErrStylesDownload is returned when the basecoat CDN styles
+	// bundle could not be fetched and no cached copy is available.
+	ErrStylesDownload = errors.New("basecoat styles download failed")
+	// ErrJSDownload is returned when the basecoat runtime JS could
+	// not be fetched and no cached or embedded copy is available.
+	ErrJSDownload = errors.New("basecoat runtime download failed")
 )
 
 // basecoatStylesURL is the jsdelivr-hosted basecoat CDN bundle. The
@@ -26,15 +52,26 @@ var basecoatStylesURL = "https://cdn.jsdelivr.net/npm/basecoat-css@1/dist/baseco
 // so we re-download on every Init rather than tracking ETags.
 var basecoatJSURL = "https://cdn.jsdelivr.net/npm/basecoat-css/dist/js/all.min.js"
 
-// downloadFile performs a simple HTTP GET and writes the body to dst.
-// Used for download-once assets (styles.css) where the caller doesn't
-// need to react to remote changes.
+// drainAndClose reads any remaining bytes from body and closes it.
+// Discarding the body before close lets the underlying connection be
+// returned to the pool for reuse. Errors are ignored — the response
+// is already a failure case by the time this is called.
+func drainAndClose(body io.ReadCloser) {
+	io.Copy(io.Discard, body)
+	body.Close()
+}
+
+// downloadFile performs a simple HTTP GET with the shared client's
+// timeout and writes the body to dst. Used for download-once assets
+// (styles.css) where the caller doesn't need to react to remote
+// changes. The timeout prevents a hung CDN connection from blocking
+// Init forever.
 func downloadFile(url, dst string) error {
-	resp, err := http.Get(url)
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d fetching %s", resp.StatusCode, url)
 	}
@@ -57,6 +94,11 @@ func downloadFile(url, dst string) error {
 // track ETag or Last-Modified for it. If the cache is already
 // populated the existing copy is reused without a network call.
 //
+// A failed download (network error, non-200, timeout, or partial
+// write) is wrapped with ErrStylesDownload so callers can detect it
+// via errors.Is. There is no embedded fallback for the styles bundle
+// — a first-run CDN failure is a hard error.
+//
 // Returns the absolute path of the cached file.
 func ensureBasecoatStyles(cacheDir string) (string, error) {
 	dst := filepath.Join(cacheDir, "basecoat", "styles.css")
@@ -64,7 +106,7 @@ func ensureBasecoatStyles(cacheDir string) (string, error) {
 		return dst, nil
 	}
 	if err := downloadFile(basecoatStylesURL, dst); err != nil {
-		return "", fmt.Errorf("downloading basecoat styles: %w", err)
+		return "", fmt.Errorf("%w: %v", ErrStylesDownload, err)
 	}
 	return dst, nil
 }
@@ -75,35 +117,42 @@ func ensureBasecoatStyles(cacheDir string) (string, error) {
 // alternative is an ETag round-trip per Init, which adds a network
 // hop to save a few KB. We pick simplicity.
 //
+// Fallback chain on download failure (network error, non-200, or
+// timeout):
+//  1. If a previous cache copy exists at {cacheDir}/basecoat/basecoat.js
+//     it is served and err is nil — the runtime is just a version
+//     behind, which is acceptable.
+//  2. Otherwise the caller is expected to supply the embedded
+//     //go:embed byte slice. The error is wrapped with ErrJSDownload
+//     so the caller can detect the failure via errors.Is and decide
+//     whether to abort or proceed with the embedded fallback. The
+//     returned data is nil in this case; the caller owns the fallback.
+//
 // Returns:
 //   - path: the absolute path of the cached file (non-empty on success
-//     AND on transient network failure if a previous cache exists)
+//     and on cache-only fallback after a transient network failure)
 //   - data: the runtime bytes, ready to prepend to basecoat.js
-//   - err:  non-nil only if both the download and the cache lookup fail
-//
-// If the network is down and no cache exists, the caller should fall
-// back to the embedded //go:embed byte slice; that fallback is the
-// caller's responsibility (Init wraps the failure in the embedded
-// bytes itself).
+//   - err:  non-nil only when the download failed AND no cache copy
+//     exists; wrapped with ErrJSDownload
 func ensureBasecoatJS(cacheDir string) (path string, data []byte, err error) {
 	dst := filepath.Join(cacheDir, "basecoat", "basecoat.js")
 
-	resp, err := http.Get(basecoatJSURL)
+	resp, err := httpClient.Get(basecoatJSURL)
 	if err != nil {
 		// Network failure: serve whatever's on disk, if anything.
 		if b, rerr := os.ReadFile(dst); rerr == nil {
 			return dst, b, nil
 		}
-		return "", nil, fmt.Errorf("downloading basecoat runtime: %w", err)
+		return "", nil, fmt.Errorf("%w: %v", ErrJSDownload, err)
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		// Non-200 (e.g. CDN outage): serve cache, no error.
 		if b, rerr := os.ReadFile(dst); rerr == nil {
 			return dst, b, nil
 		}
-		return "", nil, fmt.Errorf("HTTP %d fetching %s", resp.StatusCode, basecoatJSURL)
+		return "", nil, fmt.Errorf("%w: HTTP %d fetching %s", ErrJSDownload, resp.StatusCode, basecoatJSURL)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -111,7 +160,7 @@ func ensureBasecoatJS(cacheDir string) (path string, data []byte, err error) {
 		if b, rerr := os.ReadFile(dst); rerr == nil {
 			return dst, b, nil
 		}
-		return "", nil, fmt.Errorf("reading basecoat runtime body: %w", err)
+		return "", nil, fmt.Errorf("%w: reading body: %v", ErrJSDownload, err)
 	}
 
 	// Successfully fetched. Persist and return.

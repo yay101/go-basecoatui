@@ -29,8 +29,15 @@ import (
 	"sync"
 )
 
+// EmbeddedBasecoatJS is the //go:embed'd basecoat runtime, used as a
+// last-resort fallback when the CDN download fails and no cache copy
+// is available. Init no longer falls back to it silently — it returns
+// an error wrapped with ErrJSDownload instead. Callers that want to
+// proceed with the embedded runtime can construct a *UnionFS directly,
+// passing EmbeddedBasecoatJS as the embeddedJS argument.
+//
 //go:embed basecoatui/v0.3.11/basecoat.js
-var embeddedBasecoatJS []byte
+var EmbeddedBasecoatJS []byte
 
 // watchable maps fs.FS values returned by Watch() back to their
 // filesystem root paths, so Init can set up polling on them.
@@ -88,11 +95,18 @@ type FS interface {
 // basecoat's CDN bundle (basecoat.cdn.min.css, pinned to the latest
 // 1.x on jsdelivr) into cacheDir (cached on disk after the first run,
 // never refreshed), and fetches the latest basecoat.js runtime from
-// jsdelivr on every Init (the embedded //go:embed byte slice is used
-// as a fallback when the network is down). basecoat.css = styles +
-// user basecoat/css/**/*.css. basecoat.js = runtime + user
+// jsdelivr on every Init. basecoat.css = styles + user
+// basecoat/css/**/*.css. basecoat.js = runtime + user
 // basecoat/js/**/*.js. Starts a poll watcher for sources passed via
 // Watch() unless Static is true.
+//
+// Both downloads are bounded by a 30s timeout so a stalled CDN
+// connection surfaces as an error instead of hanging forever. A
+// styles download failure (with no cache) is a hard error. A JS
+// download failure is a hard error too — but if a previous cache copy
+// exists it is reused silently (the runtime is just a version behind).
+// Callers that want to proceed with the embedded runtime fallback
+// when no cache exists can construct a *UnionFS directly.
 //
 // cacheDir is the local directory where downloaded assets are stored.
 // sources is a list of fs.FS values — use basecoat.Watch() for any that
@@ -105,11 +119,11 @@ func Init(cacheDir string, sources ...fs.FS) (FS, error) {
 
 	jsPath, jsBytes, err := ensureBasecoatJS(cacheDir)
 	if err != nil {
-		// Network failure: fall back to the embedded runtime so the
-		// library still produces a working basecoat.js. The cache
-		// is not touched.
-		jsPath = ""
-		jsBytes = embeddedBasecoatJS
+		// No cached runtime and the CDN is unreachable. Surface the
+		// error rather than silently producing a bundle built on a
+		// stale embedded fallback. Callers that explicitly want the
+		// embedded fallback can build a *UnionFS themselves.
+		return nil, err
 	}
 
 	u := newUnionFS(sources, stylesPath, jsPath, jsBytes, cacheDir)

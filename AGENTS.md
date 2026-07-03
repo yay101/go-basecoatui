@@ -82,10 +82,10 @@ go run ./cmd/basecoat --mode=child \
 | `basecoat.go` | Package entry. `FS` interface, `Init` (parent), `InitChild`, `Watch()`, `Mask()`, `Static` config, `//go:embed` basecoat runtime fallback. |
 | `unionfs.go` | `UnionFS` (`fs.FS` + `fs.ReadDirFS` + `fs.StatFS` impl), virtual file/dir types, `Reload` (atomic swap under write lock), `ReadDir`/`Stat`, `basecoat/` namespace masking, `snapshotSources` helper, `Close()`. |
 | `watcher.go` | `watchSource` (mod-time map), 2-second `pollWatcher` goroutine. |
-| `download.go` | `downloadFile`, `ensureBasecoatStyles` (download-once), `ensureBasecoatJS` (always-download with embedded fallback). |
+| `download.go` | `downloadFile`, `ensureBasecoatStyles` (download-once), `ensureBasecoatJS` (always-download with cache fallback), `httpClient`, sentinel errors (`ErrStylesDownload`, `ErrJSDownload`). |
 | `generate.go` | `generateCSS`, `generateJS`, `walkExt`. |
 | `minify.go` | `minifyCSS`, `minifyJS` — simple textual passes. |
-| `basecoatui/v0.X.Y/basecoat.js` | Embedded basecoat JS runtime, used as a network-failure fallback in parent mode. |
+| `basecoatui/v0.X.Y/basecoat.js` | Embedded basecoat JS runtime, used as a last-resort fallback by callers that construct a `*UnionFS` directly (`Init` no longer falls back to it silently). |
 | `cmd/basecoat/main.go` | CLI with `--mode=parent|child`, `--cache`, repeated `--source`. |
 | `example/` | Runnable demo server that uses `template.ParseFS(ufs, "**/*.html")` in its index handler. |
 
@@ -93,7 +93,7 @@ go run ./cmd/basecoat --mode=child \
 
 When you change behaviour, these are the symbols callers depend on:
 
-- `basecoat.Init(cacheDir string, sources ...fs.FS) (FS, error)` — parent mode: downloads styles.css + jsdelivr basecoat.js, embeds the runtime into basecoat.js
+- `basecoat.Init(cacheDir string, sources ...fs.FS) (FS, error)` — parent mode: downloads styles.css + jsdelivr basecoat.js, embeds the runtime into basecoat.js. Returns `ErrStylesDownload` / `ErrJSDownload` on CDN failure with no cache.
 - `basecoat.InitChild(sources ...fs.FS) (FS, error)` — child mode: no network, no embedded runtime, just user content
 - `basecoat.FS` interface — embeds `fs.FS`, `fs.ReadDirFS`, `fs.StatFS` plus `Reload`, `AddSource`, `RemoveSource`, `Close`
 - `basecoat.Watch(root string) fs.FS` — registers the path with the poll watcher
@@ -127,8 +127,9 @@ parent has already loaded the shim), so child mode does not append it.
 
 Internal but worth knowing: `sourceFS`, `sourceRef`, `virtualFile`,
 `virtualDir`, `pollWatcher`, `watchSource`, `watchableRoot`, `masked`,
-`walkExt`, `snapshotSources`, `newUnionFS`, `embeddedBasecoatJS`,
-`basecoatJSURL`, `lifecycleJS`, `lifecycleShim`.
+`walkExt`, `snapshotSources`, `newUnionFS`, `EmbeddedBasecoatJS`,
+`basecoatJSURL`, `basecoatStylesURL`, `httpClient`, `downloadTimeout`,
+`lifecycleJS`, `lifecycleShim`.
 
 ## Conventions
 
@@ -355,14 +356,23 @@ Semantics worth knowing:
   restart.
 - `ensureBasecoatJS` re-downloads `https://cdn.jsdelivr.net/npm/basecoat-css/dist/js/all.min.js`
   on every Init (the URL is unpinned so jsdelivr serves the latest).
-  If the download fails it falls back to the `//go:embed`d bytes in
-  `basecoatui/v0.3.11/basecoat.js`, then to the cache copy. The
-  fallback chain: fresh download → cached copy → embedded bytes.
+  If the download fails it falls back to the cached copy at
+  `{cacheDir}/basecoat/basecoat.js` (no error). If no cache exists,
+  `Init` returns an error wrapped with `ErrJSDownload` — the
+  embedded `//go:embed`d bytes in `basecoatui/v0.3.11/basecoat.js`
+  are no longer used as a silent fallback by `Init`; callers that
+  want the embedded runtime must construct a `*UnionFS` directly
+  and pass `EmbeddedBasecoatJS` as the `embeddedJS` argument.
   Update the embedded file when the project cuts a new runtime.
-- `ensureBasecoatJS` and `ensureBasecoatStyles` use plain `http.Get` with
-  no timeout, no retries, and no checksum verification. `Init` surfaces
-  styles.css failures as a hard error; JS failures fall back to the
-  embedded bytes (or the cache) so the server can still start.
+- `ensureBasecoatJS` and `ensureBasecoatStyles` use a shared
+  `httpClient` with a 30s timeout (`downloadTimeout`), no retries,
+  and no checksum verification. `Init` surfaces styles.css failures
+  as a hard error (wrapped with `ErrStylesDownload`); JS failures
+  are a hard error only when no cache copy exists (wrapped with
+  `ErrJSDownload`). A cached JS copy silently keeps the server
+  running on a CDN outage (the runtime is just a version behind).
+  Both sentinels are exported as `ErrStylesDownload` / `ErrJSDownload`
+  for `errors.Is`.
 - Cache layout is `{cacheDir}/basecoat/{styles.css,basecoat.js}`. Changing
   this shape will invalidate every existing user's cache.
 - HTML files inside `basecoat/...` are masked from `Open` / `ReadDir` /
@@ -388,8 +398,10 @@ Semantics worth knowing:
 
 ## TODO
 
-- Consider factoring `downloadFile` to take an `http.Client` so tests
-  can inject a stub instead of overriding the package-level `basecoatJSURL`
-  var.
+- The shared `httpClient` already has a 30s timeout, but
+  `downloadFile` and `ensureBasecoatJS` still reach for it via the
+  package-level var. If finer-grained control is ever needed (per-
+  request timeouts, custom transports for tests), pass the client in
+  as an argument rather than adding more package-level state.
 - No CI configuration. If added, run `go vet ./...`, `go test -race ./...`,
   and `gofmt -l .` as the minimum pipeline.
