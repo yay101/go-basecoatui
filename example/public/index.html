@@ -13,7 +13,7 @@
        basecoat.IncludeTailwindBrowser = false if you compile CSS
        locally with @import "tailwindcss"; @import "basecoat-css"; -->
 </head>
-<body>
+<body style="opacity:0;transition:opacity .2s ease-out">
 
 <div class="p-4 md:p-6 xl:p-12">
 <div class="max-w-screen-lg mx-auto">
@@ -399,5 +399,6 @@
     }
   });
 </script>
+<script>document.body.style.opacity='1'</script>
 </body>
 </html>
