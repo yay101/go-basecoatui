@@ -5,8 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>basecoat examples</title>
   <link rel="stylesheet" href="/basecoat.css">
-  <!-- basecoat.css already includes the Tailwind v4 preflight and
-       theme layer, so no Tailwind browser script is needed. -->
+  <!-- basecoat.css ships the Tailwind v4 preflight + theme layer and
+       the basecoat component classes. The Tailwind v4 browser build
+       is prepended to basecoat.js by Init (parent mode), so the single
+       <script src="/basecoat.js"> tag below also generates the layout
+       utilities (flex, grid, p-4, ...) at runtime. Set
+       basecoat.IncludeTailwindBrowser = false if you compile CSS
+       locally with @import "tailwindcss"; @import "basecoat-css"; -->
 </head>
 <body>
 

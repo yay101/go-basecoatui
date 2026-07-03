@@ -461,14 +461,14 @@ func TestUnionFS_Stat_DelegatesToSources(t *testing.T) {
 // newTestParentFS builds a UnionFS in parent mode wired up with a
 // fake styles.css path and a fake runtime path. Avoids the network.
 func newTestParentFS(sources []fs.FS, stylesCSS, runtimeJS string) *UnionFS {
-	u := newUnionFS(sources, stylesCSS, runtimeJS, nil, "")
+	u := newUnionFS(sources, stylesCSS, runtimeJS, nil, "", nil, "")
 	u.Reload()
 	return u
 }
 
 // newTestChildFS builds a UnionFS in child mode (no parent assets).
 func newTestChildFS(sources []fs.FS) *UnionFS {
-	u := newUnionFS(sources, "", "", nil, "")
+	u := newUnionFS(sources, "", "", nil, "", nil, "")
 	u.Reload()
 	return u
 }
@@ -596,6 +596,144 @@ func TestGenerateJS_EmbeddedFallbackWhenJSDownloadFails(t *testing.T) {
 	}
 	if len(body) <= len("basecoat.register('a','.a',function(){});") {
 		t.Errorf("fallback basecoat.js too short — embedded fallback may be missing; got %d bytes", len(body))
+	}
+}
+
+func TestGenerateJS_Parent_PrependsTailwindBrowserBuild(t *testing.T) {
+	styles := writeTempFile(t, ".x{}")
+	js := writeTempFile(t, `var RUNTIME_MARKER = 1;`)
+
+	u := newTestParentFS([]fs.FS{
+		fstest.MapFS{
+			"basecoat/js/a.js": &fstest.MapFile{Data: []byte("basecoat.register('a','.a',function(){});")},
+		},
+	}, styles, js)
+	// Inject the tailwind browser build bytes directly so the test
+	// does not hit the network. The marker survives the JS minifier
+	// because it is a real identifier in a string literal.
+	u.tailwindBrowserJS = []byte(`var TAILWIND_BROWSER_MARKER = "tw";`)
+	u.Reload()
+
+	body, err := readVirtual(t, u, "basecoat.js")
+	if err != nil {
+		t.Fatalf("readVirtual: %v", err)
+	}
+	got := string(body)
+
+	// The tailwind browser build must be the FIRST thing in the
+	// bundle — it scans the DOM and generates utilities before the
+	// basecoat runtime and user JS run.
+	if !strings.Contains(got, "TAILWIND_BROWSER_MARKER") {
+		t.Errorf("basecoat.js missing tailwind browser marker; got: %s", got)
+	}
+	twIdx := strings.Index(got, "TAILWIND_BROWSER_MARKER")
+	rtIdx := strings.Index(got, "RUNTIME_MARKER")
+	usrIdx := strings.Index(got, "basecoat.register('a'")
+	if !(twIdx < rtIdx && rtIdx < usrIdx) {
+		t.Errorf("expected order tw < runtime < user; got tw=%d runtime=%d user=%d", twIdx, rtIdx, usrIdx)
+	}
+}
+
+func TestGenerateJS_Child_OmitsTailwindBrowserBuild(t *testing.T) {
+	u := newTestChildFS([]fs.FS{
+		fstest.MapFS{
+			"basecoat/js/a.js": &fstest.MapFile{Data: []byte("basecoat.register('a','.a',function(){});")},
+		},
+	})
+	// Child mode should never have tailwind browser bytes, but set
+	// them anyway to prove generateJS ignores them when runtimeJS
+	// is nil (child mode skips the parent-only prepend path).
+	u.tailwindBrowserJS = []byte(`var SHOULD_NOT_APPEAR = 1;`)
+	u.Reload()
+
+	body, err := readVirtual(t, u, "basecoat.js")
+	if err != nil {
+		t.Fatalf("readVirtual: %v", err)
+	}
+	got := string(body)
+	if strings.Contains(got, "SHOULD_NOT_APPEAR") {
+		t.Errorf("child basecoat.js should not include tailwind browser build; got: %s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ensureTailwindBrowser: download round-trip + cache fallback.
+// ---------------------------------------------------------------------------
+
+func TestEnsureTailwindBrowser_DownloadsAndCaches(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Write([]byte("/* tailwind browser v1 */"))
+	}))
+	defer srv.Close()
+
+	orig := tailwindBrowserURL
+	tailwindBrowserURL = srv.URL
+	t.Cleanup(func() { tailwindBrowserURL = orig })
+
+	cacheDir := t.TempDir()
+	path, data, err := ensureTailwindBrowser(cacheDir)
+	if err != nil {
+		t.Fatalf("ensureTailwindBrowser: %v", err)
+	}
+	if path == "" {
+		t.Error("expected non-empty path on successful download")
+	}
+	if string(data) != "/* tailwind browser v1 */" {
+		t.Errorf("got %q, want %q", data, "/* tailwind browser v1 */")
+	}
+	if atomic.LoadInt32(&hits) != 1 {
+		t.Errorf("server hits: got %d, want 1", hits)
+	}
+
+	cached, err := os.ReadFile(filepath.Join(cacheDir, "basecoat", "tailwind-browser.js"))
+	if err != nil {
+		t.Fatalf("read cached: %v", err)
+	}
+	if string(cached) != "/* tailwind browser v1 */" {
+		t.Errorf("cached: got %q, want %q", cached, "/* tailwind browser v1 */")
+	}
+}
+
+func TestEnsureTailwindBrowser_ServesCacheWhenCDNDown(t *testing.T) {
+	cacheDir := t.TempDir()
+	cached := []byte("/* cached tailwind browser */")
+	if err := os.MkdirAll(filepath.Join(cacheDir, "basecoat"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "basecoat", "tailwind-browser.js"), cached, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := tailwindBrowserURL
+	tailwindBrowserURL = "http://127.0.0.1:1/always-down"
+	t.Cleanup(func() { tailwindBrowserURL = orig })
+
+	path, data, err := ensureTailwindBrowser(cacheDir)
+	if err != nil {
+		t.Fatalf("expected cache fallback to succeed; got %v", err)
+	}
+	if path == "" {
+		t.Error("expected non-empty path when cache exists")
+	}
+	if string(data) != string(cached) {
+		t.Errorf("got %q, want %q (cached bytes)", data, cached)
+	}
+}
+
+func TestEnsureTailwindBrowser_ErrorsWhenNoCacheAndCDNDown(t *testing.T) {
+	orig := tailwindBrowserURL
+	tailwindBrowserURL = "http://127.0.0.1:1/always-down"
+	t.Cleanup(func() { tailwindBrowserURL = orig })
+
+	_, _, err := ensureTailwindBrowser(t.TempDir())
+	if err == nil {
+		t.Error("expected error when network is down and no cache exists")
+	}
+	if !errors.Is(err, ErrTailwindBrowserDownload) {
+		t.Errorf("expected ErrTailwindBrowserDownload sentinel; got %v", err)
 	}
 }
 

@@ -47,6 +47,25 @@ var watchable sync.Map
 // during Init and never again. Use in production.
 var Static bool
 
+// IncludeTailwindBrowser controls whether Init (parent mode) downloads
+// the Tailwind v4 browser build and prepends it to basecoat.js. The
+// basecoat CDN styles bundle is compiled with `@import "tailwindcss"
+// source(none)`, so it ships the Tailwind v4 preflight + theme +
+// basecoat component classes but ZERO utility classes. The browser
+// build scans the DOM at runtime and generates the utilities (flex,
+// grid, p-4, ...) the page uses for layout.
+//
+// Defaults to true so a freshly-Init'd parent renders correctly out of
+// the box with a single <script src="/basecoat.js"> tag. Set to false
+// when your build pipeline compiles CSS locally with
+// `@import "tailwindcss"; @import "basecoat-css";` so Tailwind scans
+// your source files and emits the utilities at build time — the
+// browser build is then redundant and just adds ~270KB of runtime
+// work.
+//
+// Has no effect in child mode (InitChild never downloads it).
+var IncludeTailwindBrowser = true
+
 // Watch wraps root in an io/fs.FS and registers it with the poll-based
 // watcher. Use Watch when you want Init to auto-detect file changes in
 // a directory and regenerate basecoat.css / basecoat.js.
@@ -114,13 +133,27 @@ type FS interface {
 // basecoat/js/**/*.js. Starts a poll watcher for sources passed via
 // Watch() unless Static is true.
 //
-// Both downloads are bounded by a 30s timeout so a stalled CDN
+// When IncludeTailwindBrowser is true (the default), Init also
+// downloads the Tailwind v4 browser build and prepends it to
+// basecoat.js. The basecoat CDN styles bundle ships the Tailwind v4
+// preflight + theme + basecoat component classes but ZERO utility
+// classes (it is compiled with `@import "tailwindcss" source(none)`),
+// so the browser build is what generates the layout utilities (flex,
+// grid, p-4, ...) at runtime by scanning the DOM. Set
+// IncludeTailwindBrowser = false when your build pipeline compiles
+// CSS locally with `@import "tailwindcss"; @import "basecoat-css";`.
+//
+// All downloads are bounded by a 30s timeout so a stalled CDN
 // connection surfaces as an error instead of hanging forever. A
 // styles download failure (with no cache) is a hard error. A JS
 // download failure is a hard error too — but if a previous cache copy
 // exists it is reused silently (the runtime is just a version behind).
-// Callers that want to proceed with the embedded runtime fallback
-// when no cache exists can construct a *UnionFS directly.
+// A tailwind browser download failure is a SOFT error: Init proceeds
+// without it, so a CDN outage on the tailwind endpoint does not take
+// the server down (the page loses Tailwind utilities but basecoat
+// components still render). Callers that want to proceed with the
+// embedded runtime fallback when no cache exists can construct a
+// *UnionFS directly.
 //
 // cacheDir is the local directory where downloaded assets are stored.
 // sources is a list of fs.FS values — use basecoat.Watch() for any that
@@ -140,7 +173,21 @@ func Init(cacheDir string, sources ...fs.FS) (FS, error) {
 		return nil, err
 	}
 
-	u := newUnionFS(sources, stylesPath, jsPath, jsBytes, cacheDir)
+	// The Tailwind browser build is optional — a CDN failure here
+	// degrades gracefully (no utilities) rather than aborting Init.
+	var twPath string
+	var twBytes []byte
+	if IncludeTailwindBrowser {
+		twPath, twBytes, err = ensureTailwindBrowser(cacheDir)
+		if err != nil {
+			// Soft failure: log nothing, just proceed without the
+			// browser build. The page will lack Tailwind utilities
+			// but basecoat components still work.
+			twPath, twBytes = "", nil
+		}
+	}
+
+	u := newUnionFS(sources, stylesPath, jsPath, jsBytes, twPath, twBytes, cacheDir)
 	u.Reload()
 
 	if !Static {
@@ -157,7 +204,7 @@ func Init(cacheDir string, sources ...fs.FS) (FS, error) {
 // page load). Starts a poll watcher for sources passed via Watch()
 // unless Static is true.
 func InitChild(sources ...fs.FS) (FS, error) {
-	u := newUnionFS(sources, "", "", nil, "")
+	u := newUnionFS(sources, "", "", nil, "", nil, "")
 	u.Reload()
 
 	if !Static {

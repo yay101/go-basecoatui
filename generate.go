@@ -42,16 +42,34 @@ func generateCSS(sources []sourceFS, basecoatStylesPath string) (string, error) 
 }
 
 // generateJS builds the basecoat.js string by concatenating:
+//   - tailwindBrowserJS if non-nil (parent mode, holds the Tailwind v4
+//     browser build which scans the DOM and generates utility classes
+//     at runtime),
 //   - runtimeJS if non-nil (parent mode, holds the downloaded or
-//     embedded basecoat.js),
+//     embedded basecoat.js runtime),
+//   - the lifecycle shim (parent mode only, after the runtime),
 //   - every basecoat/js/**/*.js file from every source.
 //
-// In child mode runtimeJS is nil and only user JS is included. The
-// result is minified.
-func generateJS(sources []sourceFS, runtimeJS []byte) (string, error) {
+// In child mode both tailwindBrowserJS and runtimeJS are nil and only
+// user JS is included. The result is minified.
+//
+// The Tailwind browser build is prepended (parent mode only, gated on
+// runtimeJS being non-nil so a child bundle never re-injects it — the
+// parent page has already loaded it) so it runs before the basecoat
+// runtime and before the DOM is touched by user JS. It is not minified
+// here — it is already minified upstream and re-minifying a ~270KB
+// blob with the textual minifier is wasteful.
+func generateJS(sources []sourceFS, runtimeJS, tailwindBrowserJS []byte) (string, error) {
 	var parts []string
 
 	if len(runtimeJS) > 0 {
+		// Parent mode: prepend the Tailwind browser build first so it
+		// scans the DOM and generates utilities before the basecoat
+		// runtime and user JS run. Child mode skips this entirely —
+		// the parent page has already loaded it.
+		if len(tailwindBrowserJS) > 0 {
+			parts = append(parts, string(tailwindBrowserJS))
+		}
 		parts = append(parts, string(runtimeJS))
 		// Lifecycle shim: wraps basecoat.register with an optional
 		// destroy(el) and adds destroy(el)/destroyAll(root). Parent

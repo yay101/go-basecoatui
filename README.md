@@ -57,9 +57,13 @@ func main() {
 }
 ```
 
-Your `public/index.html` just loads the two bundles and is done —
-`basecoat.css` already includes the Tailwind v4 preflight and theme
-layer:
+Your `public/index.html` just loads the two bundles and is done.
+`basecoat.css` includes the Tailwind v4 preflight + theme layer and
+the basecoat component classes. `basecoat.js` (in parent mode)
+prepends the Tailwind v4 browser build, which scans the DOM at
+runtime and generates the utility classes (`flex`, `grid`, `p-4`,
+...) your markup uses for layout — so a single `<script>` tag yields
+both the utilities and the basecoat component lifecycle:
 
 ```html
 <!doctype html>
@@ -71,9 +75,17 @@ layer:
 </head>
 <body>
 <!-- your markup here -->
+<script src="/basecoat.js"></script>
 </body>
 </html>
 ```
+
+If your build pipeline compiles CSS locally with
+`@import "tailwindcss"; @import "basecoat-css";` (so Tailwind scans
+your source files and emits utilities at build time), set
+`basecoat.IncludeTailwindBrowser = false` before `Init` to skip the
+~270KB browser build download — it's redundant when utilities are
+already in your CSS.
 
 ## How the CSS and JS are built
 
@@ -82,25 +94,42 @@ layer:
    `https://cdn.jsdelivr.net/npm/basecoat-css@1/dist/basecoat.cdn.min.css`
    (the URL is pinned to `@1`, so jsdelivr serves the latest 1.x
    release; downloaded once on first `Init`, cached at
-   `{cacheDir}/basecoat/styles.css`, never refreshed). This is the
-   complete basecoat + Tailwind v4 bundle — component classes *and*
-   utility classes, preflight and theme included.
+   `{cacheDir}/basecoat/styles.css`, never refreshed). This bundle
+   ships the Tailwind v4 preflight + theme layer and the basecoat
+   component classes. It is compiled with `@import "tailwindcss"
+   source(none)`, so it does **not** include Tailwind utility classes
+   — those are generated at runtime by the Tailwind v4 browser build
+   prepended to `basecoat.js` (see below), or at build time if you
+   compile CSS locally with `@import "tailwindcss"; @import "basecoat-css";`.
 2. Every `basecoat/css/**/*.css` across your sources, in source order,
    recursively. Concatenated and minified.
 
 `basecoat.js` is the concatenation of:
-1. The basecoat.js runtime fetched from
+1. The Tailwind v4 browser build fetched from
+   `https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4` (pinned to
+   `@4`, so jsdelivr serves the latest 4.x release; re-downloaded on
+   every `Init`). It scans the DOM at runtime and generates the
+   Tailwind utility classes (`flex`, `grid`, `p-4`, ...) your markup
+   uses — the basecoat CDN styles bundle does not ship utilities (it
+   is compiled with `@import "tailwindcss" source(none)`). If the
+   download fails, a cached copy at
+   `{cacheDir}/basecoat/tailwind-browser.js` is used instead. If no
+   cache exists, `Init` proceeds without it — a soft failure (the
+   page loses utilities but basecoat components still render). Skip
+   the download entirely with `basecoat.IncludeTailwindBrowser = false`
+   when you compile CSS locally. Parent mode only.
+2. The basecoat.js runtime fetched from
    `https://cdn.jsdelivr.net/npm/basecoat-css/dist/js/all.min.js` (the
    URL is unpinned, so jsdelivr serves the latest published version
    on every `Init`). If the download fails, a previously cached copy
    at `{cacheDir}/basecoat/basecoat.js` is used instead (the runtime
    is just a version behind). If no cache exists, `Init` returns an
    error — see "Download failures" below.
-2. The **lifecycle shim** (`lifecycle.js`, embedded via
+3. The **lifecycle shim** (`lifecycle.js`, embedded via
    `lifecycle.go`) that wraps `basecoat.register` with an optional
    `destroy(el)` and adds `basecoat.destroy` / `destroyAll` /
    `unregister`. Parent mode only — see "Component lifecycle (destroy)".
-3. Every `basecoat/js/**/*.js` across your sources, in source order,
+4. Every `basecoat/js/**/*.js` across your sources, in source order,
    recursively. Concatenated and minified.
 
 There is no tree-shaking. The prebuilt bundle is small enough that
@@ -462,10 +491,10 @@ Semantics:
 
 ## Download failures
 
-Both CDN downloads (styles + JS) use a shared `http.Client` with a
-**30-second timeout**, so a stalled or hung CDN connection surfaces as
-an error instead of blocking `Init` forever. There are no retries and
-no checksum verification.
+All CDN downloads (styles + JS + Tailwind browser build) use a shared
+`http.Client` with a **30-second timeout**, so a stalled or hung CDN
+connection surfaces as an error instead of blocking `Init` forever.
+There are no retries and no checksum verification.
 
 `Init` handles failures as follows:
 
@@ -473,8 +502,16 @@ no checksum verification.
 |---|---|---|
 | Styles (`basecoat.cdn.min.css`) | Cached copy reused, no error | **Hard error** — `ErrStylesDownload` |
 | JS runtime (`all.min.js`) | Cached copy reused, no error | **Hard error** — `ErrJSDownload` |
+| Tailwind browser (`@tailwindcss/browser@4`) | Cached copy reused, no error | **Soft error** — `ErrTailwindBrowserDownload` (Init proceeds without it) |
 
-Both sentinels are exported for `errors.Is`:
+The Tailwind browser build is the only soft failure: `Init` swallows
+the error and starts the server anyway. The page loses Tailwind
+utility classes (so layout breaks) but basecoat components still
+render. Disable the download entirely with
+`basecoat.IncludeTailwindBrowser = false` when you compile CSS
+locally.
+
+The sentinels are exported for `errors.Is`:
 
 ```go
 import (
@@ -536,11 +573,12 @@ go install github.com/yay101/go-basecoatui/cmd/basecoat@latest
 
 ## Package-level configuration
 
-Set this before calling `Init`:
+Set these before calling `Init`:
 
 | Variable | Default | Description |
 |---|---|---|
 | `Static` | `false` | Disable the poll watcher. Generation runs once. |
+| `IncludeTailwindBrowser` | `true` | Download the Tailwind v4 browser build and prepend it to `basecoat.js` (parent mode). Set to `false` when you compile CSS locally with `@import "tailwindcss"; @import "basecoat-css";` so utilities are emitted at build time and the ~270KB browser build is redundant. |
 
 ## Updating the embedded basecoat.js runtime
 

@@ -69,6 +69,14 @@ type UnionFS struct {
 	basecoatJSPath     string // path to downloaded basecoat.js;  "" in child mode or when download failed
 	embeddedJS         []byte // fallback runtime bytes (used when jsPath is "")
 
+	// tailwindBrowserJS is the Tailwind v4 browser build, prepended to
+	// basecoat.js in parent mode so a single <script> tag yields both
+	// the runtime utilities (flex, grid, p-4, ...) and the basecoat
+	// component lifecycle. nil in child mode or when the download
+	// failed and no cache existed (graceful degradation: basecoat
+	// components still render, but Tailwind utility classes do not).
+	tailwindBrowserJS []byte
+
 	cachePath string
 	watcher   *pollWatcher
 	static    bool
@@ -78,7 +86,7 @@ type UnionFS struct {
 // parent-mode asset paths/bytes. sources are registered as
 // "init-0", "init-1", ... in order. The caller is responsible for
 // calling Reload (and startWatcher, if !Static) afterwards.
-func newUnionFS(sources []fs.FS, basecoatStylesPath, basecoatJSPath string, embeddedJS []byte, cachePath string) *UnionFS {
+func newUnionFS(sources []fs.FS, basecoatStylesPath, basecoatJSPath string, embeddedJS []byte, twPath string, twBrowserJS []byte, cachePath string) *UnionFS {
 	srcs := make([]sourceFS, 0, len(sources))
 	srcIdx := make(map[string]sourceRef, len(sources))
 	for i, s := range sources {
@@ -98,6 +106,7 @@ func newUnionFS(sources []fs.FS, basecoatStylesPath, basecoatJSPath string, embe
 		basecoatStylesPath: basecoatStylesPath,
 		basecoatJSPath:     basecoatJSPath,
 		embeddedJS:         embeddedJS,
+		tailwindBrowserJS:  twBrowserJS,
 		cachePath:          cachePath,
 		static:             Static,
 	}
@@ -470,6 +479,7 @@ func (u *UnionFS) Reload() {
 	stylesPath := u.basecoatStylesPath
 	jsPath := u.basecoatJSPath
 	embeddedJS := u.embeddedJS
+	twBrowserJS := u.tailwindBrowserJS
 	u.mu.RUnlock()
 
 	// Re-read the cached basecoat.js on every Reload so a refreshed
@@ -490,7 +500,7 @@ func (u *UnionFS) Reload() {
 	if err != nil {
 		return
 	}
-	js, err := generateJS(sources, runtimeJS)
+	js, err := generateJS(sources, runtimeJS, twBrowserJS)
 	if err != nil {
 		return
 	}

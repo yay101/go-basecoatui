@@ -79,10 +79,10 @@ go run ./cmd/basecoat --mode=child \
 
 | File | Responsibility |
 |---|---|
-| `basecoat.go` | Package entry. `FS` interface, `Init` (parent), `InitChild`, `Watch()`, `Mask()`, `Static` config, `//go:embed` basecoat runtime fallback. |
+| `basecoat.go` | Package entry. `FS` interface, `Init` (parent), `InitChild`, `Watch()`, `Mask()`, `Static` + `IncludeTailwindBrowser` config, `//go:embed` basecoat runtime fallback. |
 | `unionfs.go` | `UnionFS` (`fs.FS` + `fs.ReadDirFS` + `fs.StatFS` impl), virtual file/dir types, `Reload` (atomic swap under write lock), `ReadDir`/`Stat`, `basecoat/` namespace masking, `Unmasked()` read-only view, `snapshotSources` helper, `Close()`. |
 | `watcher.go` | `watchSource` (mod-time map), 2-second `pollWatcher` goroutine. |
-| `download.go` | `downloadFile`, `ensureBasecoatStyles` (download-once), `ensureBasecoatJS` (always-download with cache fallback), `httpClient`, sentinel errors (`ErrStylesDownload`, `ErrJSDownload`). |
+| `download.go` | `downloadFile`, `ensureBasecoatStyles` (download-once), `ensureBasecoatJS` (always-download with cache fallback), `ensureTailwindBrowser` (always-download, soft-fail), `httpClient`, sentinel errors (`ErrStylesDownload`, `ErrJSDownload`, `ErrTailwindBrowserDownload`). |
 | `generate.go` | `generateCSS`, `generateJS`, `walkExt`. |
 | `minify.go` | `minifyCSS`, `minifyJS` — simple textual passes. |
 | `basecoatui/v0.X.Y/basecoat.js` | Embedded basecoat JS runtime, used as a last-resort fallback by callers that construct a `*UnionFS` directly (`Init` no longer falls back to it silently). |
@@ -93,7 +93,7 @@ go run ./cmd/basecoat --mode=child \
 
 When you change behaviour, these are the symbols callers depend on:
 
-- `basecoat.Init(cacheDir string, sources ...fs.FS) (FS, error)` — parent mode: downloads styles.css + jsdelivr basecoat.js, embeds the runtime into basecoat.js. Returns `ErrStylesDownload` / `ErrJSDownload` on CDN failure with no cache.
+- `basecoat.Init(cacheDir string, sources ...fs.FS) (FS, error)` — parent mode: downloads styles.css + jsdelivr basecoat.js + (when `IncludeTailwindBrowser` is true, the default) the Tailwind v4 browser build, and embeds the runtime + browser build into basecoat.js. Returns `ErrStylesDownload` / `ErrJSDownload` on CDN failure with no cache. A tailwind browser download failure is a soft error (Init proceeds without it).
 - `basecoat.InitChild(sources ...fs.FS) (FS, error)` — child mode: no network, no embedded runtime, just user content
 - `basecoat.FS` interface — embeds `fs.FS`, `fs.ReadDirFS`, `fs.StatFS` plus `Reload`, `AddSource`, `RemoveSource`, `Close`
 - `basecoat.Watch(root string) fs.FS` — registers the path with the poll watcher
@@ -106,7 +106,7 @@ When you change behaviour, these are the symbols callers depend on:
 - `(FS).Unmasked() fs.FS` — read-only view of the same union that does NOT mask the reserved `basecoat/` namespace. Satisfies `fs.FS`, `fs.ReadDirFS`, `fs.StatFS`. Shares sources and regenerated CSS/JS with the parent; mutation methods (`Reload`/`AddSource`/`RemoveSource`/`Close`) are on the parent only. Use for `template.ParseFS` to pick up fragments under `basecoat/html/`; keep using the masked `UnionFS` for HTTP serving.
 - `(FS).Close() error`
 - `*UnionFS` is still exported as the concrete implementation; tests and power users can type-assert/declare it directly
-- Package vars: `Static`
+- Package vars: `Static`, `IncludeTailwindBrowser`
 
 ### Component lifecycle (JS, parent bundle only)
 
@@ -130,8 +130,8 @@ Internal but worth knowing: `sourceFS`, `sourceRef`, `virtualFile`,
 `virtualDir`, `unmaskedFS`, `pollWatcher`, `watchSource`, `watchableRoot`,
 `masked`, `openWith`, `readDirWith`, `statWith`, `openRootDirWith`,
 `walkExt`, `snapshotSources`, `newUnionFS`, `EmbeddedBasecoatJS`,
-`basecoatJSURL`, `basecoatStylesURL`, `httpClient`, `downloadTimeout`,
-`lifecycleJS`, `lifecycleShim`.
+`basecoatJSURL`, `basecoatStylesURL`, `tailwindBrowserURL`, `httpClient`,
+`downloadTimeout`, `lifecycleJS`, `lifecycleShim`.
 
 ## Conventions
 
@@ -409,8 +409,21 @@ Semantics worth knowing:
   running on a CDN outage (the runtime is just a version behind).
   Both sentinels are exported as `ErrStylesDownload` / `ErrJSDownload`
   for `errors.Is`.
-- Cache layout is `{cacheDir}/basecoat/{styles.css,basecoat.js}`. Changing
-  this shape will invalidate every existing user's cache.
+- `ensureTailwindBrowser` (parent mode, only when
+  `IncludeTailwindBrowser` is true, the default) re-downloads
+  `https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4` on every Init
+  and caches it at `{cacheDir}/basecoat/tailwind-browser.js`. On CDN
+  failure it falls back to the cached copy (no error). If no cache
+  exists, `Init` proceeds WITHOUT it — a soft error wrapped with
+  `ErrTailwindBrowserDownload` is returned by the helper but `Init`
+  swallows it so the server still starts. The page loses Tailwind
+  utility classes but basecoat components still render. Disable the
+  download entirely with `basecoat.IncludeTailwindBrowser = false`
+  when your build pipeline compiles CSS locally with
+  `@import "tailwindcss"; @import "basecoat-css";` so Tailwind scans
+  your source files and emits the utilities at build time.
+- Cache layout is `{cacheDir}/basecoat/{styles.css,basecoat.js,tailwind-browser.js}`.
+  Changing this shape will invalidate every existing user's cache.
 - HTML files inside `basecoat/...` are masked from `Open` / `ReadDir` /
   `Stat` (and from `template.ParseFS(ufs, "*.html")` globs). To find
   them with a glob, either put them outside `basecoat/`, or parse
