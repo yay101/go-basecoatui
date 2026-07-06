@@ -656,6 +656,86 @@ func TestGenerateJS_Child_OmitsTailwindBrowserBuild(t *testing.T) {
 	}
 }
 
+// TestGenerateCSS_OverlayFirstMatchWins pins the behaviour added in
+// v0.8.4: generation walks the unmasked union, so two sources that
+// each define basecoat/css/<same-name>.css resolve with first-match-
+// wins (the first registered source wins), NOT additive concatenation.
+// Under the pre-v0.8.4 raw-sources walk both files would be concatenated
+// and the second source's content would leak into basecoat.css.
+func TestGenerateCSS_OverlayFirstMatchWins(t *testing.T) {
+	u := newTestUnionFS()
+	u.AddSource("first", fstest.MapFS{
+		"basecoat/css/app.css": &fstest.MapFile{Data: []byte(".from-first{padding:1rem;}")},
+	})
+	u.AddSource("second", fstest.MapFS{
+		"basecoat/css/app.css": &fstest.MapFile{Data: []byte(".from-second{padding:2rem;}")},
+	})
+	u.Reload()
+
+	css, err := readVirtual(t, u, "basecoat.css")
+	if err != nil {
+		t.Fatalf("readVirtual: %v", err)
+	}
+	got := string(css)
+	if !strings.Contains(got, ".from-first") {
+		t.Errorf("basecoat.css missing first source's content; got: %s", got)
+	}
+	if strings.Contains(got, ".from-second") {
+		t.Errorf("basecoat.css should NOT include second source's content (overlay first-match-wins); got: %s", got)
+	}
+}
+
+// TestGenerateJS_OverlayFirstMatchWins is the JS analogue: two sources
+// defining basecoat/js/<same-name>.js resolve with first-match-wins.
+func TestGenerateJS_OverlayFirstMatchWins(t *testing.T) {
+	u := newTestUnionFS()
+	u.AddSource("first", fstest.MapFS{
+		"basecoat/js/app.js": &fstest.MapFile{Data: []byte("basecoat.register('first','.first',function(){});")},
+	})
+	u.AddSource("second", fstest.MapFS{
+		"basecoat/js/app.js": &fstest.MapFile{Data: []byte("basecoat.register('second','.second',function(){});")},
+	})
+	u.Reload()
+
+	js, err := readVirtual(t, u, "basecoat.js")
+	if err != nil {
+		t.Fatalf("readVirtual: %v", err)
+	}
+	got := string(js)
+	if !strings.Contains(got, "register('first'") {
+		t.Errorf("basecoat.js missing first source's content; got: %s", got)
+	}
+	if strings.Contains(got, "register('second'") {
+		t.Errorf("basecoat.js should NOT include second source's content (overlay first-match-wins); got: %s", got)
+	}
+}
+
+// TestGenerateCSS_DistinctNamesAcrossSourcesStillMerge confirms the
+// overlay change didn't break the additive case for distinct file names:
+// two sources contributing different files under basecoat/css/ both
+// end up in basecoat.css.
+func TestGenerateCSS_DistinctNamesAcrossSourcesStillMerge(t *testing.T) {
+	u := newTestUnionFS()
+	u.AddSource("first", fstest.MapFS{
+		"basecoat/css/a.css": &fstest.MapFile{Data: []byte(".from-first{padding:1rem;}")},
+	})
+	u.AddSource("second", fstest.MapFS{
+		"basecoat/css/b.css": &fstest.MapFile{Data: []byte(".from-second{padding:2rem;}")},
+	})
+	u.Reload()
+
+	css, err := readVirtual(t, u, "basecoat.css")
+	if err != nil {
+		t.Fatalf("readVirtual: %v", err)
+	}
+	got := string(css)
+	for _, want := range []string{".from-first", ".from-second"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("basecoat.css missing %q; got: %s", want, got)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ensureTailwindBrowser: download round-trip + cache fallback.
 // ---------------------------------------------------------------------------
