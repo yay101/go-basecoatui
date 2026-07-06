@@ -51,31 +51,22 @@ func generateCSS(sources []sourceFS, basecoatStylesPath string) (string, error) 
 //   - every basecoat/js/**/*.js file from every source.
 //
 // In child mode both tailwindBrowserJS and runtimeJS are nil and only
-// user JS is included. The result is minified.
-//
-// The Tailwind browser build is prepended (parent mode only, gated on
-// runtimeJS being non-nil so a child bundle never re-injects it — the
-// parent page has already loaded it) so it runs before the basecoat
-// runtime and before the DOM is touched by user JS. It is not minified
-// here — it is already minified upstream and re-minifying a ~270KB
-// blob with the textual minifier is wasteful.
+// user JS is included. The runtime + lifecycle + user JS are minified
+// together; the Tailwind browser build is prepended verbatim — it is
+// already minified upstream and re-minifying a ~270KB blob with the
+// textual minifier is both wasteful and risky (its dense regexes can
+// trip the regex/division heuristic in stripJSComments).
 func generateJS(sources []sourceFS, runtimeJS, tailwindBrowserJS []byte) (string, error) {
-	var parts []string
+	var minified []string
 
 	if len(runtimeJS) > 0 {
-		// Parent mode: prepend the Tailwind browser build first so it
-		// scans the DOM and generates utilities before the basecoat
-		// runtime and user JS run. Child mode skips this entirely —
-		// the parent page has already loaded it.
-		if len(tailwindBrowserJS) > 0 {
-			parts = append(parts, string(tailwindBrowserJS))
-		}
-		parts = append(parts, string(runtimeJS))
+		parts := []string{string(runtimeJS)}
 		// Lifecycle shim: wraps basecoat.register with an optional
 		// destroy(el) and adds destroy(el)/destroyAll(root). Parent
 		// mode only — child bundles rely on the parent's shim being
 		// already on the page.
 		parts = append(parts, string(lifecycleShim()))
+		minified = append(minified, parts...)
 	}
 
 	for _, src := range sources {
@@ -89,11 +80,21 @@ func generateJS(sources []sourceFS, runtimeJS, tailwindBrowserJS []byte) (string
 			if err != nil {
 				continue
 			}
-			parts = append(parts, string(data))
+			minified = append(minified, string(data))
 		}
 	}
 
-	return minifyJS(strings.Join(parts, "\n")), nil
+	body := minifyJS(strings.Join(minified, "\n"))
+
+	// Parent mode: prepend the Tailwind browser build first so it
+	// scans the DOM and generates utilities before the basecoat
+	// runtime and user JS run. It is left un-minified (see comment
+	// above). Child mode skips this entirely — the parent page has
+	// already loaded it.
+	if len(runtimeJS) > 0 && len(tailwindBrowserJS) > 0 {
+		return string(tailwindBrowserJS) + "\n" + body, nil
+	}
+	return body, nil
 }
 
 // walkExt returns every path under root in fsys whose file name ends in
