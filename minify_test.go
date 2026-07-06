@@ -90,6 +90,31 @@ func TestStripJSComments(t *testing.T) {
 			"a;/**/b",
 			"a;b",
 		},
+		{
+			"regex literal with double quote in class",
+			`var r = s.replace(/["\\]/g, ''); var x = 'ok';`,
+			`var r = s.replace(/["\\]/g, ''); var x = 'ok';`,
+		},
+		{
+			"regex literal then real line comment",
+			`var r = /["\\]/g; // real comment` + "\n" + `var x = 'ok';`,
+			`var r = /["\\]/g; ` + "\n" + `var x = 'ok';`,
+		},
+		{
+			"division not mistaken for regex",
+			`var x = 1 / 2; var y = 3;`,
+			`var x = 1 / 2; var y = 3;`,
+		},
+		{
+			"return keyword starts regex",
+			`function f() { return /abc/g.test('x'); }`,
+			`function f() { return /abc/g.test('x'); }`,
+		},
+		{
+			"regex with escape in class",
+			`var r = /[\]\[]/g; var y = 2;`,
+			`var r = /[\]\[]/g; var y = 2;`,
+		},
 	}
 
 	for _, tt := range tests {
