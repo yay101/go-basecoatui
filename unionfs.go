@@ -474,13 +474,18 @@ func (u *UnionFS) reindexFull(from int) {
 // safe to call from inside the poll watcher callback.
 func (u *UnionFS) Reload() {
 	u.mu.RLock()
-	sources := make([]sourceFS, len(u.sources))
-	copy(sources, u.sources)
 	stylesPath := u.basecoatStylesPath
 	jsPath := u.basecoatJSPath
 	embeddedJS := u.embeddedJS
 	twBrowserJS := u.tailwindBrowserJS
 	u.mu.RUnlock()
+
+	// Walk the unmasked view of this UnionFS so basecoat/{css,js}/... is
+	// enumerable while the mask still hides it from the public Open path.
+	// This keeps generation on the same first-match-wins overlay
+	// semantics as every other path instead of concatenating across
+	// sources, which was a divergence from how Open resolves files.
+	ufs := u.Unmasked()
 
 	// Re-read the cached basecoat.js on every Reload so a refreshed
 	// download between Inits is picked up without a server restart.
@@ -496,11 +501,11 @@ func (u *UnionFS) Reload() {
 		runtimeJS = embeddedJS
 	}
 
-	css, err := generateCSS(sources, stylesPath)
+	css, err := generateCSS(ufs, stylesPath)
 	if err != nil {
 		return
 	}
-	js, err := generateJS(sources, runtimeJS, twBrowserJS)
+	js, err := generateJS(ufs, runtimeJS, twBrowserJS)
 	if err != nil {
 		return
 	}

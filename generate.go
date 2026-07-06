@@ -10,11 +10,14 @@ import (
 
 // generateCSS builds the basecoat.css string by concatenating:
 //   - the contents of basecoatStylesPath if non-empty (parent mode),
-//   - every basecoat/css/**/*.css file from every source.
+//   - every basecoat/css/**/*.css file reachable through ufs.
 //
-// In child mode basecoatStylesPath is "" and only user CSS is included.
-// The result is minified.
-func generateCSS(sources []sourceFS, basecoatStylesPath string) (string, error) {
+// ufs is the unmasked view of the UnionFS, so the reserved
+// basecoat/ namespace is enumerable but paths under it still resolve
+// with the same first-match-wins overlay semantics as every other
+// path. In child mode basecoatStylesPath is "" and only user CSS is
+// included. The result is minified.
+func generateCSS(ufs fs.FS, basecoatStylesPath string) (string, error) {
 	var parts []string
 
 	if basecoatStylesPath != "" {
@@ -23,19 +26,17 @@ func generateCSS(sources []sourceFS, basecoatStylesPath string) (string, error) 
 		}
 	}
 
-	for _, src := range sources {
-		for _, name := range walkExt(src.fs, "basecoat/css", ".css") {
-			f, err := src.fs.Open(name)
-			if err != nil {
-				continue
-			}
-			data, err := io.ReadAll(f)
-			f.Close()
-			if err != nil {
-				continue
-			}
-			parts = append(parts, string(data))
+	for _, name := range walkExt(ufs, "basecoat/css", ".css") {
+		f, err := ufs.Open(name)
+		if err != nil {
+			continue
 		}
+		data, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			continue
+		}
+		parts = append(parts, string(data))
 	}
 
 	return minifyCSS(strings.Join(parts, "\n")), nil
@@ -48,7 +49,11 @@ func generateCSS(sources []sourceFS, basecoatStylesPath string) (string, error) 
 //   - runtimeJS if non-nil (parent mode, holds the downloaded or
 //     embedded basecoat.js runtime),
 //   - the lifecycle shim (parent mode only, after the runtime),
-//   - every basecoat/js/**/*.js file from every source.
+//   - every basecoat/js/**/*.js file reachable through ufs.
+//
+// ufs is the unmasked view of the UnionFS, so the reserved basecoat/
+// namespace is enumerable but paths under it still resolve with the
+// same first-match-wins overlay semantics as every other path.
 //
 // In child mode both tailwindBrowserJS and runtimeJS are nil and only
 // user JS is included. The runtime + lifecycle + user JS are minified
@@ -56,7 +61,7 @@ func generateCSS(sources []sourceFS, basecoatStylesPath string) (string, error) 
 // already minified upstream and re-minifying a ~270KB blob with the
 // textual minifier is both wasteful and risky (its dense regexes can
 // trip the regex/division heuristic in stripJSComments).
-func generateJS(sources []sourceFS, runtimeJS, tailwindBrowserJS []byte) (string, error) {
+func generateJS(ufs fs.FS, runtimeJS, tailwindBrowserJS []byte) (string, error) {
 	var minified []string
 
 	if len(runtimeJS) > 0 {
@@ -69,19 +74,17 @@ func generateJS(sources []sourceFS, runtimeJS, tailwindBrowserJS []byte) (string
 		minified = append(minified, parts...)
 	}
 
-	for _, src := range sources {
-		for _, name := range walkExt(src.fs, "basecoat/js", ".js") {
-			f, err := src.fs.Open(name)
-			if err != nil {
-				continue
-			}
-			data, err := io.ReadAll(f)
-			f.Close()
-			if err != nil {
-				continue
-			}
-			minified = append(minified, string(data))
+	for _, name := range walkExt(ufs, "basecoat/js", ".js") {
+		f, err := ufs.Open(name)
+		if err != nil {
+			continue
 		}
+		data, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			continue
+		}
+		minified = append(minified, string(data))
 	}
 
 	body := minifyJS(strings.Join(minified, "\n"))
