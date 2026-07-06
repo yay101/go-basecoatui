@@ -1,13 +1,20 @@
 package basecoat
 
 import (
-	"os"
+	"io/fs"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
 // watchSource wraps a filesystem root with a map of last-known
-// modification times. It detects changes by polling ReadDir.
+// modification times. It detects changes by recursively polling the
+// tree under root and comparing mtimes of every file and directory it
+// sees. The recursion is required because on Linux (and other
+// platforms) modifying a file inside a subdirectory does NOT update the
+// parent directory's mtime — a shallow ReadDir(root) would miss every
+// change below the top level, which is precisely where basecoat/css/
+// and basecoat/js/ live.
 type watchSource struct {
 	root string
 	mods map[string]time.Time
@@ -18,29 +25,57 @@ func newWatchSource(root string) *watchSource {
 	return &watchSource{root: root, mods: make(map[string]time.Time)}
 }
 
-// changed returns true if any file in the directory has a new
-// modification time since the last call. It updates its internal map
-// on each call so repeated checks are idempotent.
+// changed returns true if any file or directory under root has a new
+// modification time since the last call (or has appeared/disappeared).
+// It updates its internal map on each call so repeated checks are
+// idempotent. A walk error (e.g. root removed) reports as no change so
+// the watcher doesn't fire on a source being temporarily unavailable.
 func (w *watchSource) changed() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	entries, err := os.ReadDir(w.root)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		info, err := e.Info()
+
+	seen := make(map[string]bool, len(w.mods))
+	var changed bool
+
+	_ = filepath.WalkDir(w.root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			continue
+			if err == fs.SkipDir {
+				return err
+			}
+			// Best-effort: a transient walk error (e.g. a file
+			// deleted between ReadDir and Stat) should not abort
+			// the whole sweep. Return nil so we keep walking the
+			// rest of the tree.
+			return nil
 		}
-		p := info.Name()
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		rel, err := filepath.Rel(w.root, p)
+		if err != nil {
+			rel = p
+		}
 		mod := info.ModTime()
-		if prev, ok := w.mods[p]; !ok || !prev.Equal(mod) {
-			w.mods[p] = mod
-			return true
+		seen[rel] = true
+		if prev, ok := w.mods[rel]; !ok || !prev.Equal(mod) {
+			w.mods[rel] = mod
+			changed = true
+		}
+		return nil
+	})
+
+	// Detect files/dirs that disappeared from the tree since the
+	// last sweep. They are removed from the map so it does not grow
+	// without bound, and their disappearance counts as a change.
+	for name := range w.mods {
+		if !seen[name] {
+			delete(w.mods, name)
+			changed = true
 		}
 	}
-	return false
+
+	return changed
 }
 
 // pollWatcher runs a goroutine that checks watchSource entries every

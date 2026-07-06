@@ -382,10 +382,14 @@ Semantics worth knowing:
 - Use `basecoat.Watch(root)`, not bare `os.DirFS(root)`, for any source you
   want the watcher to poll. `Dir()` is the only thing that registers the
   root for change detection.
-- The poll watcher reads `os.ReadDir` on the root only — it does not
-  recurse. Changes in nested subdirectories (e.g. `components/basecoat/css/`)
-  will still trigger regeneration because the parent dir's mtime updates,
-  but the watcher cannot tell you *which* file changed.
+- The poll watcher walks the tree under each registered root
+  recursively with `filepath.WalkDir` and compares mtimes of every
+  file and directory it sees. The recursion is required: on Linux
+  modifying a file inside a subdirectory does NOT update the parent
+  directory's mtime, so a shallow `ReadDir(root)` would miss every
+  change below the top level — which is precisely where
+  `basecoat/css/` and `basecoat/js/` live. The watcher cannot tell
+  you *which* file changed, only that something under the root did.
 - `ensureBasecoatStyles` downloads `https://cdn.jsdelivr.net/npm/basecoat-css@1/dist/basecoat.cdn.min.css`
   (pinned to the latest 1.x) on first Init and never refreshes. If
   you need a fresh copy, delete `{cacheDir}/basecoat/styles.css` and
