@@ -37,7 +37,8 @@ var (
 //     basecoat/js/**/*.js across all sources
 //
 // In parent mode the optional basecoat assets are set (one or both):
-// the styles.css is read from disk on every Reload, the runtime is
+// the styles.css is read from disk on every Reload (falling back to
+// embeddedCSS when the path is empty or unreadable), the runtime is
 // held in memory as embeddedJS (with its on-disk path remembered for
 // logging). In child mode both are zero/nil and the output is just
 // user content.
@@ -65,7 +66,8 @@ type UnionFS struct {
 
 	// Parent-mode only. In child mode both stay empty and
 	// generateCSS/generateJS skip them, producing user-only output.
-	basecoatStylesPath string // path to downloaded styles.css; "" in child mode
+	basecoatStylesPath string // path to downloaded styles.css; "" in child mode or when download failed
+	embeddedCSS        []byte // fallback styles bytes (used when stylesPath is "")
 	basecoatJSPath     string // path to downloaded basecoat.js;  "" in child mode or when download failed
 	embeddedJS         []byte // fallback runtime bytes (used when jsPath is "")
 
@@ -86,7 +88,7 @@ type UnionFS struct {
 // parent-mode asset paths/bytes. sources are registered as
 // "init-0", "init-1", ... in order. The caller is responsible for
 // calling Reload (and startWatcher, if !Static) afterwards.
-func newUnionFS(sources []fs.FS, basecoatStylesPath, basecoatJSPath string, embeddedJS []byte, twPath string, twBrowserJS []byte, cachePath string) *UnionFS {
+func newUnionFS(sources []fs.FS, basecoatStylesPath string, embeddedCSS []byte, basecoatJSPath string, embeddedJS []byte, twPath string, twBrowserJS []byte, cachePath string) *UnionFS {
 	srcs := make([]sourceFS, 0, len(sources))
 	srcIdx := make(map[string]sourceRef, len(sources))
 	for i, s := range sources {
@@ -104,6 +106,7 @@ func newUnionFS(sources []fs.FS, basecoatStylesPath, basecoatJSPath string, embe
 		sources:            srcs,
 		sourceIdx:          srcIdx,
 		basecoatStylesPath: basecoatStylesPath,
+		embeddedCSS:        embeddedCSS,
 		basecoatJSPath:     basecoatJSPath,
 		embeddedJS:         embeddedJS,
 		tailwindBrowserJS:  twBrowserJS,
@@ -475,6 +478,7 @@ func (u *UnionFS) reindexFull(from int) {
 func (u *UnionFS) Reload() {
 	u.mu.RLock()
 	stylesPath := u.basecoatStylesPath
+	embeddedCSS := u.embeddedCSS
 	jsPath := u.basecoatJSPath
 	embeddedJS := u.embeddedJS
 	twBrowserJS := u.tailwindBrowserJS
@@ -486,6 +490,22 @@ func (u *UnionFS) Reload() {
 	// semantics as every other path instead of concatenating across
 	// sources, which was a divergence from how Open resolves files.
 	ufs := u.Unmasked()
+
+	// Re-read the cached styles.css on every Reload so a refreshed
+	// download between Inits is picked up without a server restart.
+	// Falls back to embeddedCSS when the path is empty or the file is
+	// unreadable (e.g. embedded-only construction). In child mode both
+	// are nil and generateCSS produces user-only output.
+	var stylesCSS []byte
+	if stylesPath != "" {
+		if b, err := os.ReadFile(stylesPath); err == nil {
+			stylesCSS = b
+		} else {
+			stylesCSS = embeddedCSS
+		}
+	} else {
+		stylesCSS = embeddedCSS
+	}
 
 	// Re-read the cached basecoat.js on every Reload so a refreshed
 	// download between Inits is picked up without a server restart.
@@ -501,7 +521,7 @@ func (u *UnionFS) Reload() {
 		runtimeJS = embeddedJS
 	}
 
-	css, err := generateCSS(ufs, stylesPath)
+	css, err := generateCSS(ufs, stylesCSS)
 	if err != nil {
 		return
 	}

@@ -523,7 +523,9 @@ import (
 ufs, err := basecoat.Init("./cache", basecoat.Watch("./public"))
 switch {
 case errors.Is(err, basecoat.ErrStylesDownload):
-    // styles CDN unreachable and no cached styles.css
+    // styles CDN unreachable and no cached styles.css — you can
+    // either retry, abort, or build a *UnionFS directly and pass
+    // basecoat.EmbeddedBasecoatCSS as the embedded styles.
 case errors.Is(err, basecoat.ErrJSDownload):
     // runtime CDN unreachable and no cached basecoat.js — you can
     // either retry, abort, or build a *UnionFS directly and pass
@@ -531,11 +533,12 @@ case errors.Is(err, basecoat.ErrJSDownload):
 }
 ```
 
-`Init` no longer silently falls back to the embedded runtime on a JS
-download failure — it returns the error so the caller knows. If you
-want the old "keep the server running on a stale embedded runtime"
-behaviour, construct a `*UnionFS` directly and pass
-`basecoat.EmbeddedBasecoatJS` as the `embeddedJS` argument.
+`Init` no longer silently falls back to the embedded styles or runtime
+on a download failure — it returns the error so the caller knows. If
+you want the old "keep the server running on a stale embedded
+fallback" behaviour, construct a `*UnionFS` directly and pass
+`basecoat.EmbeddedBasecoatCSS` and/or `basecoat.EmbeddedBasecoatJS` as
+the `embeddedCSS` / `embeddedJS` arguments.
 
 ## CLI
 
@@ -580,22 +583,24 @@ Set these before calling `Init`:
 | `Static` | `false` | Disable the poll watcher. Generation runs once. |
 | `IncludeTailwindBrowser` | `true` | Download the Tailwind v4 browser build and prepend it to `basecoat.js` (parent mode). Set to `false` when you compile CSS locally with `@import "tailwindcss"; @import "basecoat-css";` so utilities are emitted at build time and the ~270KB browser build is redundant. |
 
-## Updating the embedded basecoat.js runtime
+## Updating the embedded basecoat fallbacks
 
 The `//go:embed basecoatui/v0.3.11/basecoat.js` byte slice
-(`basecoat.EmbeddedBasecoatJS`) is a last-resort fallback for callers
+(`basecoat.EmbeddedBasecoatJS`) and the
+`//go:embed basecoatui/v1.0.2/basecoat.css` byte slice
+(`basecoat.EmbeddedBasecoatCSS`) are last-resort fallbacks for callers
 that construct a `*UnionFS` directly when the CDN is unreachable and
-no cache exists. `Init` itself no longer uses it silently — it
-returns `ErrJSDownload` instead — but it's still exported so a caller
-can deliberately opt into a stale runtime to keep the server running
-through a CDN outage.
+no cache exists. `Init` itself no longer uses them silently — it
+returns `ErrJSDownload` / `ErrStylesDownload` instead — but they're
+still exported so a caller can deliberately opt into a stale runtime
+or styles bundle to keep the server running through a CDN outage.
 
-The pinned version doesn't have to match the latest published runtime
-— it's a safety net, not the source of truth. To update it, drop the
-new file at `basecoatui/v<version>/basecoat.js` and change the embed
-directive in `basecoat.go`. The downloaded version is always the
-latest from jsdelivr; the embed is only consulted when a caller
-passes it in explicitly.
+The pinned versions don't have to match the latest published releases
+— they're a safety net, not the source of truth. To update either
+one, drop the new file at `basecoatui/v<version>/basecoat.js` (or
+`basecoat.css`) and change the embed directive in `basecoat.go`. The
+downloaded version is always the latest from jsdelivr; the embed is
+only consulted when a caller passes it in explicitly.
 
 ## Dependencies
 

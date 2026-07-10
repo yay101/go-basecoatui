@@ -3,27 +3,54 @@ package basecoat
 import (
 	"io"
 	"io/fs"
-	"os"
 	"sort"
 	"strings"
 )
 
+// borderColorOverride is a re-declaration of basecoat's default
+// border-color / outline-color rules, placed in @layer components
+// (which sorts above @layer base in Tailwind v4's declared layer
+// order: properties, theme, base, components, utilities).
+//
+// Without this, the Tailwind v4 browser build — prepended to
+// basecoat.js in parent mode when IncludeTailwindBrowser is true —
+// injects its own preflight into @layer base at runtime. That
+// preflight contains `*,:after,:before,::backdrop{border:0 solid;...}`
+// which resets border-color to currentColor. Because both basecoat's
+// `*{border-color:var(--color-border)}` and the preflight's
+// `border:0 solid` live in the same @layer base, source order decides
+// the winner — and the browser build injects after basecoat.css is
+// already in the document, so the preflight wins and borders vanish.
+//
+// Moving the declaration to @layer components makes it beat anything
+// in @layer base regardless of source order, which is the fix that
+// doesn't require editing the minified 217KB CDN bundle.
+//
+// This is a WORKAROUND for a Tailwind browser build behaviour that
+// may change in a future basecoat or Tailwind release. When the
+// upstream preflight no longer clobbers border-color (or when
+// basecoat ships its own higher-layer override), this block can be
+// removed. The override only applies in parent mode (when basecoat
+// styles are present), so child mode is unaffected.
+const borderColorOverride = `@layer components{*{border-color:var(--color-border);outline-color:var(--color-ring)}@supports (color:color-mix(in lab, red, red)){*{outline-color:color-mix(in oklab, var(--color-ring) 50%, transparent)}}}`
+
 // generateCSS builds the basecoat.css string by concatenating:
-//   - the contents of basecoatStylesPath if non-empty (parent mode),
+//   - basecoatStyles (the downloaded or embedded basecoat CDN bundle)
+//     when non-nil (parent mode),
+//   - the border-color layer override (parent mode only, see
+//     borderColorOverride),
 //   - every basecoat/css/**/*.css file reachable through ufs.
 //
 // ufs is the unmasked view of the UnionFS, so the reserved
 // basecoat/ namespace is enumerable but paths under it still resolve
 // with the same first-match-wins overlay semantics as every other
-// path. In child mode basecoatStylesPath is "" and only user CSS is
+// path. In child mode basecoatStyles is nil and only user CSS is
 // included. The result is minified.
-func generateCSS(ufs fs.FS, basecoatStylesPath string) (string, error) {
+func generateCSS(ufs fs.FS, basecoatStyles []byte) (string, error) {
 	var parts []string
 
-	if basecoatStylesPath != "" {
-		if data, err := os.ReadFile(basecoatStylesPath); err == nil {
-			parts = append(parts, string(data))
-		}
+	if len(basecoatStyles) > 0 {
+		parts = append(parts, string(basecoatStyles), borderColorOverride)
 	}
 
 	for _, name := range walkExt(ufs, "basecoat/css", ".css") {

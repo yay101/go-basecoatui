@@ -461,14 +461,14 @@ func TestUnionFS_Stat_DelegatesToSources(t *testing.T) {
 // newTestParentFS builds a UnionFS in parent mode wired up with a
 // fake styles.css path and a fake runtime path. Avoids the network.
 func newTestParentFS(sources []fs.FS, stylesCSS, runtimeJS string) *UnionFS {
-	u := newUnionFS(sources, stylesCSS, runtimeJS, nil, "", nil, "")
+	u := newUnionFS(sources, stylesCSS, nil, runtimeJS, nil, "", nil, "")
 	u.Reload()
 	return u
 }
 
 // newTestChildFS builds a UnionFS in child mode (no parent assets).
 func newTestChildFS(sources []fs.FS) *UnionFS {
-	u := newUnionFS(sources, "", "", nil, "", nil, "")
+	u := newUnionFS(sources, "", nil, "", nil, "", nil, "")
 	u.Reload()
 	return u
 }
@@ -529,6 +529,141 @@ func TestGenerateCSS_Child_OnlyUserCSS(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("child basecoat.css missing %q; got: %s", want, got)
 		}
+	}
+}
+
+// The border-color override must appear in parent mode output (it
+// re-declares the default border-color/outline-color in @layer
+// components so the Tailwind browser build's runtime-injected
+// @layer base preflight doesn't clobber it). Child mode must NOT
+// include it — there's no basecoat styles bundle in child mode so
+// the conflict can't happen.
+func TestGenerateCSS_Parent_IncludesBorderColorOverride(t *testing.T) {
+	styles := writeTempFile(t, ".from-styles{padding:1rem;}")
+	js := writeTempFile(t, "// runtime")
+
+	u := newTestParentFS(nil, styles, js)
+
+	css, err := readVirtual(t, u, "basecoat.css")
+	if err != nil {
+		t.Fatalf("readVirtual: %v", err)
+	}
+	got := string(css)
+	if !strings.Contains(got, "@layer components{*{border-color:var(--color-border)") {
+		t.Errorf("parent basecoat.css missing border-color override; got: %s", got)
+	}
+}
+
+func TestGenerateCSS_Child_OmitsBorderColorOverride(t *testing.T) {
+	u := newTestChildFS([]fs.FS{
+		fstest.MapFS{
+			"basecoat/css/a.css": &fstest.MapFile{Data: []byte(".a{padding:2rem;}")},
+		},
+	})
+
+	css, err := readVirtual(t, u, "basecoat.css")
+	if err != nil {
+		t.Fatalf("readVirtual: %v", err)
+	}
+	got := string(css)
+	if strings.Contains(got, "border-color:var(--color-border)") {
+		t.Errorf("child basecoat.css should not include border-color override; got: %s", got)
+	}
+}
+
+// TestBorderColorOverride_StillNeeded is a reverse test for the
+// borderColorOverride workaround in generate.go. The workaround
+// exists because the basecoat styles bundle declares
+// `*{border-color:var(--color-border);outline-color:var(--color-ring)}`
+// inside @layer base, and the Tailwind v4 browser build injects its
+// own preflight (containing `*{border:0 solid;...}`) into the same
+// @layer base at runtime — so source order decides the winner and
+// the browser build wins. The workaround re-declares the rule in
+// @layer components (which sorts above base) to make it win
+// regardless of source order.
+//
+// This test asserts the condition that makes the workaround
+// necessary: the embedded basecoat CSS still puts the
+// border-color/outline-color rule inside @layer base. When a future
+// basecoat release moves that rule to a higher layer (or removes it
+// because it's no longer needed), this test FAILS — that's the
+// signal to revisit borderColorOverride in generate.go and remove
+// the workaround.
+func TestBorderColorOverride_StillNeeded(t *testing.T) {
+	layer := layerOfRule(string(EmbeddedBasecoatCSS), "*{border-color:var(--color-border)")
+	if layer == "" {
+		t.Fatal(
+			"border-color rule *{border-color:var(--color-border) not found in " +
+				"EmbeddedBasecoatCSS — the embedded basecoat CSS bundle no " +
+				"longer declares it. Revisit borderColorOverride in " +
+				"generate.go: the workaround may no longer be needed.",
+		)
+	}
+	if layer != "base" {
+		t.Fatalf(
+			"border-color rule is in @layer %s, not @layer base. The "+
+				"Tailwind browser build preflight can no longer clobber it "+
+				"via source order in @layer base, so the borderColorOverride "+
+				"workaround in generate.go is likely unnecessary now. "+
+				"Remove it and update the tests.",
+			layer,
+		)
+	}
+}
+
+// layerOfRule finds the @layer NAME{...} block that contains the
+// given rule literal in css, and returns NAME. Returns "" if the
+// rule is not found inside any @layer block. It uses a simple brace
+// counter to delimit layer bodies — sufficient for the minified,
+// single-line CSS bundles this library ships.
+func layerOfRule(css, rule string) string {
+	idx := strings.Index(css, rule)
+	if idx < 0 {
+		return ""
+	}
+	// Walk backwards to find the innermost '{' that encloses idx.
+	depth := 0
+	for i := idx - 1; i >= 0; i-- {
+		switch css[i] {
+		case '}':
+			depth++
+		case '{':
+			if depth == 0 {
+				// This '{' opens the enclosing block. Extract the
+				// selector/header text before it and check whether
+				// it's an @layer declaration. The header may contain
+				// spaces (e.g. "@layer base"), so scan back past all
+				// non-brace characters.
+				j := i
+				for j > 0 && css[j-1] != '}' && css[j-1] != '{' {
+					j--
+				}
+				header := css[j:i]
+				if name, ok := strings.CutPrefix(header, "@layer "); ok {
+					return name
+				}
+				return ""
+			}
+			depth--
+		}
+	}
+	return ""
+}
+
+// When the on-disk styles path is unreadable, Reload falls back to
+// the embeddedCSS bytes (mirroring the JS embeddedJS fallback).
+func TestGenerateCSS_FallsBackToEmbeddedCSSWhenStylesPathUnreadable(t *testing.T) {
+	u := newUnionFS(nil, "/nonexistent/styles.css", []byte(".embedded-styles{padding:1rem;}"),
+		"", nil, "", nil, "")
+	u.Reload()
+
+	css, err := readVirtual(t, u, "basecoat.css")
+	if err != nil {
+		t.Fatalf("readVirtual: %v", err)
+	}
+	got := string(css)
+	if !strings.Contains(got, ".embedded-styles") {
+		t.Errorf("expected embedded CSS fallback; got: %s", got)
 	}
 }
 
@@ -911,7 +1046,7 @@ func TestEnsureBasecoatStyles_ErrorsWhenCDNDown(t *testing.T) {
 	basecoatStylesURL = "http://127.0.0.1:1/always-down"
 	t.Cleanup(func() { basecoatStylesURL = orig })
 
-	_, err := ensureBasecoatStyles(t.TempDir())
+	_, _, err := ensureBasecoatStyles(t.TempDir())
 	if err == nil {
 		t.Fatal("expected error when CDN is down and no cache exists")
 	}
@@ -934,13 +1069,9 @@ func TestEnsureBasecoatStyles_ServesCacheWhenCDNDown(t *testing.T) {
 	basecoatStylesURL = "http://127.0.0.1:1/always-down"
 	t.Cleanup(func() { basecoatStylesURL = orig })
 
-	path, err := ensureBasecoatStyles(cacheDir)
+	_, got, err := ensureBasecoatStyles(cacheDir)
 	if err != nil {
 		t.Fatalf("expected cache fallback to succeed; got %v", err)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
 	}
 	if string(got) != string(cached) {
 		t.Errorf("got %q, want %q (cached bytes)", got, cached)

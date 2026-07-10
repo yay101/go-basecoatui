@@ -39,6 +39,22 @@ import (
 //go:embed basecoatui/v0.3.11/basecoat.js
 var EmbeddedBasecoatJS []byte
 
+// EmbeddedBasecoatCSS is the //go:embed'd basecoat CSS bundle (the
+// same basecoat.cdn.min.css that ensureBasecoatStyles downloads from
+// jsdelivr), used as a last-resort fallback when the CDN download
+// fails and no cache copy is available. Init surfaces the error
+// (wrapped with ErrStylesDownload) rather than falling back silently,
+// mirroring the JS fallback policy. Callers that want to proceed
+// with the embedded styles can construct a *UnionFS directly,
+// passing EmbeddedBasecoatCSS as the embeddedCSS argument.
+//
+// Pinned to basecoat-css 1.0.2 (the latest 1.x at the time of
+// embedding). Update this file when the project cuts a new styles
+// release and bump the version directory to match.
+//
+//go:embed basecoatui/v1.0.2/basecoat.css
+var EmbeddedBasecoatCSS []byte
+
 // watchable maps fs.FS values returned by Watch() back to their
 // filesystem root paths, so Init can set up polling on them.
 var watchable sync.Map
@@ -152,15 +168,20 @@ type FS interface {
 // without it, so a CDN outage on the tailwind endpoint does not take
 // the server down (the page loses Tailwind utilities but basecoat
 // components still render). Callers that want to proceed with the
-// embedded runtime fallback when no cache exists can construct a
-// *UnionFS directly.
+// embedded styles or runtime fallback when no cache exists can
+// construct a *UnionFS directly, passing EmbeddedBasecoatCSS and/or
+// EmbeddedBasecoatJS as the embeddedCSS / embeddedJS arguments.
 //
 // cacheDir is the local directory where downloaded assets are stored.
 // sources is a list of fs.FS values — use basecoat.Watch() for any that
 // should trigger regeneration on file changes.
 func Init(cacheDir string, sources ...fs.FS) (FS, error) {
-	stylesPath, err := ensureBasecoatStyles(cacheDir)
+	stylesPath, stylesBytes, err := ensureBasecoatStyles(cacheDir)
 	if err != nil {
+		// No cached styles and the CDN is unreachable. Surface the
+		// error rather than silently producing a bundle built on the
+		// embedded fallback. Callers that explicitly want the embedded
+		// fallback can build a *UnionFS themselves.
 		return nil, err
 	}
 
@@ -187,7 +208,7 @@ func Init(cacheDir string, sources ...fs.FS) (FS, error) {
 		}
 	}
 
-	u := newUnionFS(sources, stylesPath, jsPath, jsBytes, twPath, twBytes, cacheDir)
+	u := newUnionFS(sources, stylesPath, stylesBytes, jsPath, jsBytes, twPath, twBytes, cacheDir)
 	u.Reload()
 
 	if !Static {
@@ -204,7 +225,7 @@ func Init(cacheDir string, sources ...fs.FS) (FS, error) {
 // page load). Starts a poll watcher for sources passed via Watch()
 // unless Static is true.
 func InitChild(sources ...fs.FS) (FS, error) {
-	u := newUnionFS(sources, "", "", nil, "", nil, "")
+	u := newUnionFS(sources, "", nil, "", nil, "", nil, "")
 	u.Reload()
 
 	if !Static {

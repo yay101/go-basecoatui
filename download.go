@@ -117,19 +117,28 @@ func downloadFile(url, dst string) error {
 //
 // A failed download (network error, non-200, timeout, or partial
 // write) is wrapped with ErrStylesDownload so callers can detect it
-// via errors.Is. There is no embedded fallback for the styles bundle
-// — a first-run CDN failure is a hard error.
+// via errors.Is. There is no automatic embedded fallback — Init
+// surfaces the error so a first-run CDN failure is visible. Callers
+// that want to proceed with the embedded styles fallback can
+// construct a *UnionFS directly, passing EmbeddedBasecoatCSS as the
+// embeddedCSS argument.
 //
-// Returns the absolute path of the cached file.
-func ensureBasecoatStyles(cacheDir string) (string, error) {
+// Returns:
+//   - path: the absolute path of the cached file (non-empty on
+//     success and on cache hit)
+//   - data: the styles bytes read from disk on cache hit, nil on the
+//     download path (the caller reads the file back via path)
+//   - err:  non-nil only when the download failed and no cache copy
+//     exists; wrapped with ErrStylesDownload
+func ensureBasecoatStyles(cacheDir string) (path string, data []byte, err error) {
 	dst := filepath.Join(cacheDir, "basecoat", "styles.css")
-	if _, err := os.Stat(dst); err == nil {
-		return dst, nil
+	if b, rerr := os.ReadFile(dst); rerr == nil {
+		return dst, b, nil
 	}
 	if err := downloadFile(basecoatStylesURL, dst); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrStylesDownload, err)
+		return "", nil, fmt.Errorf("%w: %v", ErrStylesDownload, err)
 	}
-	return dst, nil
+	return dst, nil, nil
 }
 
 // ensureBasecoatJS fetches the latest basecoat.js runtime from

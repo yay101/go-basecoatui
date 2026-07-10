@@ -79,13 +79,14 @@ go run ./cmd/basecoat --mode=child \
 
 | File | Responsibility |
 |---|---|
-| `basecoat.go` | Package entry. `FS` interface, `Init` (parent), `InitChild`, `Watch()`, `Mask()`, `Static` + `IncludeTailwindBrowser` config, `//go:embed` basecoat runtime fallback. |
+| `basecoat.go` | Package entry. `FS` interface, `Init` (parent), `InitChild`, `Watch()`, `Mask()`, `Static` + `IncludeTailwindBrowser` config, `//go:embed` basecoat runtime + styles fallbacks (`EmbeddedBasecoatJS`, `EmbeddedBasecoatCSS`). |
 | `unionfs.go` | `UnionFS` (`fs.FS` + `fs.ReadDirFS` + `fs.StatFS` impl), virtual file/dir types, `Reload` (atomic swap under write lock), `ReadDir`/`Stat`, `basecoat/` namespace masking, `Unmasked()` read-only view, `snapshotSources` helper, `Close()`. |
 | `watcher.go` | `watchSource` (mod-time map), 2-second `pollWatcher` goroutine. |
 | `download.go` | `downloadFile`, `ensureBasecoatStyles` (download-once), `ensureBasecoatJS` (always-download with cache fallback), `ensureTailwindBrowser` (always-download, soft-fail), `httpClient`, sentinel errors (`ErrStylesDownload`, `ErrJSDownload`, `ErrTailwindBrowserDownload`). |
-| `generate.go` | `generateCSS`, `generateJS`, `walkExt`. |
+| `generate.go` | `generateCSS` (with `borderColorOverride` workaround), `generateJS`, `walkExt`. |
 | `minify.go` | `minifyCSS`, `minifyJS` — simple textual passes. |
 | `basecoatui/v0.X.Y/basecoat.js` | Embedded basecoat JS runtime, used as a last-resort fallback by callers that construct a `*UnionFS` directly (`Init` no longer falls back to it silently). |
+| `basecoatui/v1.X.Y/basecoat.css` | Embedded basecoat CSS bundle (the same `basecoat.cdn.min.css` that `ensureBasecoatStyles` downloads), used as a last-resort fallback by callers that construct a `*UnionFS` directly (`Init` surfaces `ErrStylesDownload` instead of falling back silently). |
 | `cmd/basecoat/main.go` | CLI with `--mode=parent|child`, `--cache`, repeated `--source`. |
 | `example/` | Runnable demo server that uses `template.ParseFS(ufs.Unmasked(), "*.html", "basecoat/html/*.html")` in its index handler. |
 
@@ -93,7 +94,9 @@ go run ./cmd/basecoat --mode=child \
 
 When you change behaviour, these are the symbols callers depend on:
 
-- `basecoat.Init(cacheDir string, sources ...fs.FS) (FS, error)` — parent mode: downloads styles.css + jsdelivr basecoat.js + (when `IncludeTailwindBrowser` is true, the default) the Tailwind v4 browser build, and embeds the runtime + browser build into basecoat.js. Returns `ErrStylesDownload` / `ErrJSDownload` on CDN failure with no cache. A tailwind browser download failure is a soft error (Init proceeds without it).
+- `basecoat.Init(cacheDir string, sources ...fs.FS) (FS, error)` — parent mode: downloads styles.css + jsdelivr basecoat.js + (when `IncludeTailwindBrowser` is true, the default) the Tailwind v4 browser build, and embeds the runtime + browser build into basecoat.js. Returns `ErrStylesDownload` / `ErrJSDownload` on CDN failure with no cache. A tailwind browser download failure is a soft error (Init proceeds without it). Callers that want the embedded styles/runtime fallback (`EmbeddedBasecoatCSS` / `EmbeddedBasecoatJS`) must construct a `*UnionFS` directly.
+- `basecoat.EmbeddedBasecoatCSS` — `//go:embed`d basecoat CSS bundle (basecoat-css 1.0.2), used as a last-resort fallback by callers that construct a `*UnionFS` directly. `Init` surfaces `ErrStylesDownload` instead of falling back silently.
+- `basecoat.EmbeddedBasecoatJS` — `//go:embed`d basecoat JS runtime, used as a last-resort fallback by callers that construct a `*UnionFS` directly. `Init` surfaces `ErrJSDownload` instead of falling back silently.
 - `basecoat.InitChild(sources ...fs.FS) (FS, error)` — child mode: no network, no embedded runtime, just user content
 - `basecoat.FS` interface — embeds `fs.FS`, `fs.ReadDirFS`, `fs.StatFS` plus `Reload`, `AddSource`, `RemoveSource`, `Close`
 - `basecoat.Watch(root string) fs.FS` — registers the path with the poll watcher
@@ -130,8 +133,9 @@ Internal but worth knowing: `sourceFS`, `sourceRef`, `virtualFile`,
 `virtualDir`, `unmaskedFS`, `pollWatcher`, `watchSource`, `watchableRoot`,
 `masked`, `openWith`, `readDirWith`, `statWith`, `openRootDirWith`,
 `walkExt`, `snapshotSources`, `newUnionFS`, `EmbeddedBasecoatJS`,
-`basecoatJSURL`, `basecoatStylesURL`, `tailwindBrowserURL`, `httpClient`,
-`downloadTimeout`, `lifecycleJS`, `lifecycleShim`.
+`EmbeddedBasecoatCSS`, `basecoatJSURL`, `basecoatStylesURL`,
+`tailwindBrowserURL`, `httpClient`, `downloadTimeout`, `lifecycleJS`,
+`lifecycleShim`, `borderColorOverride`.
 
 ## Conventions
 
@@ -393,7 +397,14 @@ Semantics worth knowing:
 - `ensureBasecoatStyles` downloads `https://cdn.jsdelivr.net/npm/basecoat-css@1/dist/basecoat.cdn.min.css`
   (pinned to the latest 1.x) on first Init and never refreshes. If
   you need a fresh copy, delete `{cacheDir}/basecoat/styles.css` and
-  restart.
+  restart. If the download fails and no cache exists, `Init` returns
+  an error wrapped with `ErrStylesDownload` — the embedded
+  `//go:embed`d bytes in `basecoatui/v1.0.2/basecoat.css`
+  (`EmbeddedBasecoatCSS`) are not used as a silent fallback by
+  `Init`; callers that want the embedded styles must construct a
+  `*UnionFS` directly and pass `EmbeddedBasecoatCSS` as the
+  `embeddedCSS` argument. Update the embedded file when the project
+  cuts a new styles release (bump the version directory to match).
 - `ensureBasecoatJS` re-downloads `https://cdn.jsdelivr.net/npm/basecoat-css/dist/js/all.min.js`
   on every Init (the URL is unpinned so jsdelivr serves the latest).
   If the download fails it falls back to the cached copy at
@@ -413,6 +424,22 @@ Semantics worth knowing:
   running on a CDN outage (the runtime is just a version behind).
   Both sentinels are exported as `ErrStylesDownload` / `ErrJSDownload`
   for `errors.Is`.
+- `generateCSS` appends `borderColorOverride` (a re-declaration of
+  basecoat's default `*{border-color:var(--color-border)}` and
+  `*{outline-color:var(--color-ring)}` in `@layer components`) after
+  the basecoat styles bundle in parent mode. This is a workaround
+  for the Tailwind v4 browser build, which injects its own preflight
+  into `@layer base` at runtime — that preflight contains
+  `*,:after,:before,::backdrop{border:0 solid;...}` which resets
+  border-color to currentColor, and because both rules live in the
+  same `@layer base`, source order decides the winner (and the
+  browser build injects after basecoat.css is already in the
+  document). Moving the override to `@layer components` (which sorts
+  above `base`) makes it win regardless of source order. This is a
+  WORKAROUND that can be removed when the upstream preflight no
+  longer clobbers border-color, or when basecoat ships its own
+  higher-layer override. Child mode is unaffected (no styles bundle,
+  no conflict).
 - `ensureTailwindBrowser` (parent mode, only when
   `IncludeTailwindBrowser` is true, the default) re-downloads
   `https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4` on every Init
