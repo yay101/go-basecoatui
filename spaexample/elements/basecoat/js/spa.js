@@ -51,12 +51,12 @@
     }
   }
 
-  // Fetch a page fragment. The server returns just the inner content
-  // of <main id="app"> when ?fragment=1 is present (no shell, no
-  // <html>/<head>/<script> tags). On error, fall back to a full
-  // navigation so the user always lands somewhere.
+  // Fetch a page fragment. The server uses Sec-Fetch-Dest (set by the
+  // browser, not spoofable by JS) to detect the fetch() and return just
+  // the fragment body instead of the full shell. On error, fall back to
+  // a full navigation so the user always lands somewhere.
   function navigate(path, push) {
-    fetch(path + "?fragment=1", { headers: { "Accept": "text/html" } })
+    fetch(path, { headers: { "Accept": "text/html" } })
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.text();

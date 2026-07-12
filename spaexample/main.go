@@ -110,8 +110,11 @@ func handlePage(ufs basecoat.FS, path string) http.HandlerFunc {
 			return
 		}
 
-		// ?fragment=1 → render only the page fragment body (no shell).
-		if r.URL.Query().Get("fragment") == "1" {
+		// Sec-Fetch-Dest: empty → a fetch() from the SPA navigator
+		// (JS can't set this header — the browser controls it). A full
+		// navigation sends "document", curl sends nothing. Render just
+		// the fragment body so the client can swap it into #app.
+		if r.Header.Get("Sec-Fetch-Dest") == "empty" {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			if err := t.ExecuteTemplate(w, page.Fragment, nil); err != nil {
 				log.Printf("fragment execute: %v", err)
