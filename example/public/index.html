@@ -4,6 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>basecoat examples</title>
+  <script>
+    (() => {
+      try {
+        const stored = localStorage.getItem("themeMode");
+        if (stored ? stored === "dark" : matchMedia("(prefers-color-scheme: dark)").matches) {
+          document.documentElement.classList.add("dark");
+        }
+      } catch (_) {}
+    })();
+  </script>
   <link rel="stylesheet" href="/basecoat.css">
   <!-- basecoat.css ships the Tailwind v4 preflight + theme layer and
        the basecoat component classes. The Tailwind v4 browser build
@@ -19,9 +29,15 @@
 <div class="max-w-screen-lg mx-auto">
 
   <header class="flex flex-col gap-4">
-    <div class="flex flex-col gap-2">
-      <h1 class="text-2xl font-bold tracking-tight sm:text-3xl md:text-4xl">basecoat examples</h1>
-      <p class="sm:text-lg text-muted-foreground">Six component samples from <a class="underline underline-offset-4" href="https://basecoatui.com" target="_blank">basecoatui.com</a> wired up with <code>basecoat.register()</code> and <code>toaster.toast()</code>.</p>
+    <div class="flex items-start justify-between gap-4">
+      <div class="flex flex-col gap-2">
+        <h1 class="text-2xl font-bold tracking-tight sm:text-3xl md:text-4xl">basecoat examples</h1>
+        <p class="sm:text-lg text-muted-foreground">Six component samples from <a class="underline underline-offset-4" href="https://basecoatui.com" target="_blank">basecoatui.com</a> wired up with <code>basecoat.register()</code> and <code>toaster.toast()</code>.</p>
+      </div>
+      <button type="button" aria-label="Toggle dark mode" data-tooltip="Toggle dark mode" data-side="bottom" onclick="window.basecoat.theme.toggle()" class="btn size-8 shrink-0" data-variant="outline" data-size="icon">
+        <span class="hidden dark:block"><svg class="lucide lucide-sun" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.41" /></svg></span>
+        <span class="block dark:hidden"><svg class="lucide lucide-moon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" /></svg></span>
+      </button>
     </div>
   </header>
 
