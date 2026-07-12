@@ -1,0 +1,21 @@
+{{define "card-clock"}}
+<div class="card" id="example-clock">
+  {{template "card-header" dict "Title" "Live clock" "Description" "A component with a 1-second interval, cleaned up via the optional destroy callback."}}
+  <section class="grid gap-4">
+    <div data-live-clock class="flex flex-col items-center gap-1 py-4">
+      <span class="text-xs uppercase tracking-wide text-muted-foreground">local time</span>
+      <span data-live-clock-time class="text-4xl font-mono tabular-nums">--:--:--</span>
+    </div>
+    <footer class="flex items-center gap-2">
+      <button type="button" class="btn w-full" data-variant="outline" data-clock-destroy>Destroy clock</button>
+      <button type="button" class="btn w-full" data-variant="outline" data-clock-reinit>Re-init clock</button>
+    </footer>
+    <p class="text-sm text-muted-foreground">
+      Click <strong>Destroy clock</strong> to run
+      <code>basecoat.destroy(el)</code> on the card — the interval
+      is cleared and the time freezes. <strong>Re-init clock</strong>
+      calls <code>basecoat.initAll()</code> to start it again.
+    </p>
+  </section>
+</div>
+{{end}}

@@ -1,0 +1,12 @@
+body{background:var(--background);color:var(--foreground);}
+h1,h2,h3,p{margin:0;}
+ul{list-style:none;padding:0;margin:0;}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:0.85em;background:var(--muted);padding:0.1em 0.35em;border-radius:0.25rem;}
+
+/* SPA menu active state. basecoat's .btn[data-variant="ghost"] has
+   no "active" variant, so we layer one on top via [data-active="true"]
+   which the spa.js navigator toggles on the current link. */
+[data-spa-nav] [data-spa][data-active="true"]{
+  background:var(--muted);
+  font-weight:500;
+}

@@ -36,7 +36,11 @@ import (
 // proceed with the embedded runtime can construct a *UnionFS directly,
 // passing EmbeddedBasecoatJS as the embeddedJS argument.
 //
-//go:embed basecoatui/v0.3.11/basecoat.js
+// Pinned to basecoat-css 1.0.2 (the latest 1.x at the time of
+// embedding). Update this file when the project cuts a new runtime
+// release and bump the version directory to match.
+//
+//go:embed basecoatui/v1.0.2/basecoat.js
 var EmbeddedBasecoatJS []byte
 
 // EmbeddedBasecoatCSS is the //go:embed'd basecoat CSS bundle (the

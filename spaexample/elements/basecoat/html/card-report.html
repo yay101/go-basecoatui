@@ -1,0 +1,42 @@
+{{define "card-report"}}
+<div class="card" id="example-report">
+  {{template "card-header" dict "Title" "Report an issue" "Description" "What area are you having problems with?"}}
+  <section>
+    <form class="grid gap-6" data-report-form>
+      <div class="flex gap-4">
+        <div class="grid gap-2 flex-1">
+          <label class="label" for="report-issue-area">Area</label>
+          <select class="select" id="report-issue-area" name="area">
+            <option value="team">Team</option>
+            <option value="billing">Billing</option>
+            <option value="account">Account</option>
+            <option value="deployments">Deployments</option>
+            <option value="support">Support</option>
+          </select>
+        </div>
+        <div class="grid gap-2 flex-1">
+          <label class="label" for="report-issue-security-level">Security Level</label>
+          <select class="select" id="report-issue-security-level" name="security_level">
+            <option value="1">Severity 1 (Highest)</option>
+            <option value="2">Severity 2</option>
+            <option value="3">Severity 3</option>
+            <option value="4">Severity 4 (Lowest)</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid gap-2">
+        <label class="label" for="report-issue-subject">Subject</label>
+        <input class="input" type="text" id="report-issue-subject" name="subject" placeholder="I need help with...">
+      </div>
+      <div class="grid gap-2">
+        <label class="label" for="report-issue-description">Description</label>
+        <textarea class="textarea" id="report-issue-description" name="description" placeholder="Please include all information relevant to your issue."></textarea>
+      </div>
+      <footer class="flex items-center gap-4 justify-between">
+        <button type="button" class="btn" data-variant="ghost" data-size="sm" data-report-cancel>Cancel</button>
+        <button type="button" class="btn" data-size="sm" data-report-continue>Continue</button>
+      </footer>
+    </form>
+  </section>
+</div>
+{{end}}

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>basecoat SPA example</title>
+  <link rel="stylesheet" href="/basecoat.css">
+  <!-- basecoat.css ships the Tailwind v4 preflight + theme layer and
+       the basecoat component classes. The Tailwind v4 browser build
+       is prepended to basecoat.js by Init (parent mode), so the single
+       <script src="/basecoat.js"> tag below also generates the layout
+       utilities (flex, grid, p-4, ...) at runtime. -->
+</head>
+<body style="opacity:0;transition:opacity .2s ease-out">
+
+<div class="min-h-screen flex flex-col md:flex-row">
+
+  <aside class="md:w-60 md:shrink-0 border-b md:border-b-0 md:border-r bg-card">
+    <div class="p-4 md:p-6 flex flex-col gap-6 sticky top-0">
+      <div class="flex flex-col gap-1">
+        <span class="text-sm font-bold tracking-tight">basecoat</span>
+        <span class="text-xs text-muted-foreground">SPA example</span>
+      </div>
+      <nav class="flex flex-col gap-1" data-spa-nav>
+        <a href="/" data-spa class="btn justify-start" data-variant="ghost" data-size="sm" data-spa-active>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          Home
+        </a>
+        <a href="/dashboard" data-spa class="btn justify-start" data-variant="ghost" data-size="sm" data-spa-active>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+          Dashboard
+        </a>
+      </nav>
+    </div>
+  </aside>
+
+  <div class="flex-1 p-4 md:p-6 xl:p-12">
+  <div class="max-w-screen-lg mx-auto">
+
+    <header class="flex flex-col gap-2 mb-6" data-page-header>
+      <h1 class="text-2xl font-bold tracking-tight sm:text-3xl md:text-4xl" data-page-title>Home</h1>
+      <p class="sm:text-lg text-muted-foreground" data-page-subtitle>Team, cookie, payment and chat cards. Use the menu to swap pages without a reload.</p>
+    </header>
+
+    <main id="app">
+      {{template "page-home" .}}
+    </main>
+
+  </div>
+  </div>
+
+</div>
+
+<div id="toaster" class="toaster"></div>
+
+<script src="/basecoat.js"></script>
+<script>
+  // Lifecycle demo: destroy / re-init the live-clock card (dashboard page).
+  document.addEventListener('click', function (e) {
+    var card = document.getElementById('example-clock');
+    var clockEl = card && card.querySelector('[data-live-clock]');
+    if (!clockEl) return;
+    if (e.target.closest('[data-clock-destroy]')) {
+      if (window.basecoat && window.basecoat.destroy) {
+        window.basecoat.destroy(clockEl);
+      }
+    } else if (e.target.closest('[data-clock-reinit]')) {
+      if (window.basecoat && window.basecoat.initAll) {
+        window.basecoat.initAll();
+      }
+    }
+  });
+</script>
+<script>document.body.style.opacity='1'</script>
+</body>
+</html>

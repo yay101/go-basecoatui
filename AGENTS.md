@@ -410,7 +410,7 @@ Semantics worth knowing:
   If the download fails it falls back to the cached copy at
   `{cacheDir}/basecoat/basecoat.js` (no error). If no cache exists,
   `Init` returns an error wrapped with `ErrJSDownload` — the
-  embedded `//go:embed`d bytes in `basecoatui/v0.3.11/basecoat.js`
+  embedded `//go:embed`d bytes in `basecoatui/v1.0.2/basecoat.js`
   are no longer used as a silent fallback by `Init`; callers that
   want the embedded runtime must construct a `*UnionFS` directly
   and pass `EmbeddedBasecoatJS` as the `embeddedJS` argument.

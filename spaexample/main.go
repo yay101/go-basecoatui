@@ -18,6 +18,26 @@ type apiResponse struct {
 	Message string `json:"message,omitempty"`
 }
 
+// pages maps URL path → fragment template name + human-readable title.
+// Adding a page is a one-liner here; the template must be defined in
+// one of the basecoat/html/*.html fragments picked up by ParseFS.
+var pages = map[string]struct {
+	Fragment string
+	Title    string
+	Subtitle string
+}{
+	"/": {
+		Fragment: "page-home",
+		Title:    "Home",
+		Subtitle: "Team, cookie, payment and chat cards. Use the menu to swap pages without a reload.",
+	},
+	"/dashboard": {
+		Fragment: "page-dashboard",
+		Title:    "Dashboard",
+		Subtitle: "A distinct dashboard view — stats, the live clock, and the report form. Navigating here from the menu fetches only this fragment from the server.",
+	},
+}
+
 func main() {
 	basecoat.Static = false
 	// Parent mode: downloads the basecoat CDN bundle + runtime from
@@ -37,9 +57,9 @@ func main() {
 	mux.HandleFunc("POST /api/cookie-settings", handleCookieSettings)
 	mux.HandleFunc("POST /api/payment-method", handlePaymentMethod)
 	mux.HandleFunc("POST /api/chat", handleChat)
-	mux.HandleFunc("POST /api/create-account", handleCreateAccount)
 	mux.HandleFunc("POST /api/report-issue", handleReportIssue)
-	mux.HandleFunc("GET /{$}", handleIndex(ufs))
+	mux.HandleFunc("GET /{$}", handlePage(ufs, "/"))
+	mux.HandleFunc("GET /dashboard", handlePage(ufs, "/dashboard"))
 	mux.Handle("/basecoat/", http.NotFoundHandler())
 	mux.Handle("/", http.FileServer(http.FS(ufs)))
 
@@ -47,12 +67,16 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", mux))
 }
 
-// handleIndex renders the page. Templates are parsed once against
-// ufs.Unmasked() (two globs: root pages + basecoat/html/ fragments)
-// and cached; a Clone per request keeps it race-free.
-func handleIndex(ufs basecoat.FS) http.HandlerFunc {
+// handlePage serves either the full HTML shell (index.html with the
+// page fragment server-rendered into #app) or, when ?fragment=1 is
+// present, just the rendered page fragment body — the SPA navigator
+// swaps that into #app on the client. Templates are parsed once
+// against ufs.Unmasked() (two globs: root pages + basecoat/html/
+// fragments) and cached; a Clone per request keeps it race-free.
+func handlePage(ufs basecoat.FS, path string) http.HandlerFunc {
 	funcs := template.FuncMap{
 		"dict": dict,
+		"icon": iconHTML,
 	}
 	var (
 		once     sync.Once
@@ -79,9 +103,27 @@ func handleIndex(ufs basecoat.FS) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		page, ok := pages[path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+
+		// ?fragment=1 → render only the page fragment body (no shell).
+		if r.URL.Query().Get("fragment") == "1" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if err := t.ExecuteTemplate(w, page.Fragment, nil); err != nil {
+				log.Printf("fragment execute: %v", err)
+			}
+			return
+		}
+
+		// Full page: render index.html (the shell), which embeds the
+		// home fragment into #app via {{template "page-home" .}}.
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := t.ExecuteTemplate(w, "index.html", nil); err != nil {
-			log.Printf("template execute: %v", err)
+			log.Printf("page execute: %v", err)
 		}
 	}
 }
@@ -101,6 +143,13 @@ func dict(values ...any) map[string]any {
 		m[k] = values[i+1]
 	}
 	return m
+}
+
+// iconHTML wraps an inline SVG string as template.HTML so
+// html/template renders it verbatim instead of escaping the markup.
+// Use via the "icon" funcmap entry: {{icon "path d=..."}}
+func iconHTML(s string) template.HTML {
+	return template.HTML(s)
 }
 
 func readJSON(r *http.Request, out interface{}) error {
@@ -164,19 +213,6 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("chat: message=%q", data.Message)
 	writeJSON(w, http.StatusOK, apiResponse{Status: "ok", Title: "Sent"})
-}
-
-func handleCreateAccount(w http.ResponseWriter, r *http.Request) {
-	var data map[string]interface{}
-	if err := readJSON(r, &data); err != nil {
-		writeJSON(w, http.StatusBadRequest, apiResponse{Status: "error", Message: err.Error()})
-		return
-	}
-	log.Printf("create-account: %v", data)
-	writeJSON(w, http.StatusOK, apiResponse{
-		Status:  "ok",
-		Message: "Account creation is not really wired up in this example",
-	})
 }
 
 func handleReportIssue(w http.ResponseWriter, r *http.Request) {

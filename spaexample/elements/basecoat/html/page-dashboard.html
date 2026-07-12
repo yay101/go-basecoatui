@@ -1,0 +1,24 @@
+{{define "page-dashboard"}}
+<section class="flex flex-col gap-6" data-page="dashboard">
+  <header class="flex flex-col gap-1">
+    <h2 class="text-xl font-semibold tracking-tight">Overview</h2>
+    <p class="text-muted-foreground">A distinct dashboard view — stats, the live clock, and the report form. Navigating here from the menu fetches only this fragment from the server.</p>
+  </header>
+
+  <section class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+    {{template "card-stat" dict "ID" "users"    "Label" "Active users"    "Value" "12,847" "Trend" "+4.2%"  "TrendClass" "text-emerald-600" "Icon" (icon "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"/><circle cx=\"9\" cy=\"7\" r=\"4\"/><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\"/><path d=\"M16 3.13a4 4 0 0 1 0 7.75\"/></svg>")}}
+    {{template "card-stat" dict "ID" "revenue"  "Label" "Revenue (30d)"   "Value" "$48.2k" "Trend" "+12.1%" "TrendClass" "text-emerald-600" "Icon" (icon "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><line x1=\"12\" x2=\"12\" y1=\"2\" y2=\"22\"/><path d=\"M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6\"/></svg>")}}
+    {{template "card-stat" dict "ID" "issues"   "Label" "Open issues"     "Value" "7"      "Trend" "-3"     "TrendClass" "text-emerald-600" "Icon" (icon "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" x2=\"12\" y1=\"8\" y2=\"12\"/><line x1=\"12\" x2=\"12.01\" y1=\"16\" y2=\"16\"/></svg>")}}
+    {{template "card-stat" dict "ID" "uptime"   "Label" "Uptime"          "Value" "99.98%" "Trend" "+0.04%" "TrendClass" "text-emerald-600" "Icon" (icon "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"22 12 18 12 15 21 9 3 6 12 2 12\"/></svg>")}}
+  </section>
+
+  <section class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="flex flex-col gap-4">
+      {{template "card-clock" .}}
+    </div>
+    <div class="flex flex-col gap-4">
+      {{template "card-report" .}}
+    </div>
+  </section>
+</section>
+{{end}}

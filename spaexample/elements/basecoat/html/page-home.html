@@ -1,0 +1,12 @@
+{{define "page-home"}}
+<section class="grid grid-cols-1 lg:grid-cols-2 gap-4" data-page="home">
+  <div class="flex flex-col gap-4">
+    {{template "card-team" .}}
+    {{template "card-cookies" .}}
+    {{template "card-payment" .}}
+  </div>
+  <div class="flex flex-col gap-4">
+    {{template "card-chat" .}}
+  </div>
+</section>
+{{end}}

@@ -1,0 +1,93 @@
+{{define "card-team"}}
+<div class="card" id="example-team">
+  {{template "card-header" dict "Title" "Team Members" "Description" "Invite your team members to collaborate."}}
+  <section>
+    <ul class="grid gap-4">
+      <li class="flex items-center gap-4">
+        <span class="avatar" aria-label="Sofia Davis"><span>SD</span></span>
+        <div class="flex flex-col gap-1 mr-auto">
+          <h3 class="text-sm font-medium leading-none">Sofia Davis</h3>
+          <p class="text-sm text-muted-foreground">m@example.com</p>
+        </div>
+
+        <div id="team-role-sofia" class="select">
+          <button type="button" id="team-role-sofia-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="team-role-sofia-listbox">
+            <span class="truncate">Owner</span>
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevrons-up-down-icon lucide-chevrons-up-down text-muted-foreground opacity-50 shrink-0"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
+          </button>
+          <div id="team-role-sofia-popover" data-popover aria-hidden="true" data-align="end">
+            <header>
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search-icon lucide-search"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input type="text" value="" placeholder="Search entries..." autocomplete="off" autocorrect="off" spellcheck="false" aria-autocomplete="list" role="combobox" aria-expanded="false" aria-controls="team-role-sofia-listbox" aria-labelledby="team-role-sofia-trigger">
+            </header>
+            <div role="listbox" id="team-role-sofia-listbox" aria-orientation="vertical" aria-labelledby="team-role-sofia-trigger">
+              <div role="option" data-value="viewer">Viewer</div>
+              <div role="option" data-value="developer">Developer</div>
+              <div role="option" data-value="billing">Billing</div>
+              <div role="option" data-value="owner" aria-selected="true">Owner</div>
+            </div>
+          </div>
+          <input type="hidden" name="team-role-sofia" value="owner">
+        </div>
+      </li>
+
+      <li class="flex items-center gap-4">
+        <span class="avatar" aria-label="Jackson Lee"><span>JL</span></span>
+        <div class="flex flex-col gap-1 mr-auto">
+          <h3 class="text-sm font-medium leading-none">Jackson Lee</h3>
+          <p class="text-sm text-muted-foreground">p@example.com</p>
+        </div>
+
+        <div id="team-role-jackson" class="select">
+          <button type="button" id="team-role-jackson-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="team-role-jackson-listbox">
+            <span class="truncate">Empty</span>
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevrons-up-down-icon lucide-chevrons-up-down text-muted-foreground opacity-50 shrink-0"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
+          </button>
+          <div id="team-role-jackson-popover" data-popover aria-hidden="true" data-align="end">
+            <header>
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search-icon lucide-search"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input type="text" value="" placeholder="Search entries..." autocomplete="off" autocorrect="off" spellcheck="false" aria-autocomplete="list" role="combobox" aria-expanded="false" aria-controls="team-role-jackson-listbox" aria-labelledby="team-role-jackson-trigger">
+            </header>
+            <div role="listbox" id="team-role-jackson-listbox" aria-orientation="vertical" aria-labelledby="team-role-jackson-trigger">
+              <div role="option" data-value="">Empty</div>
+              <div role="option" data-value="viewer">Viewer</div>
+              <div role="option" data-value="developer">Developer</div>
+              <div role="option" data-value="billing">Billing</div>
+              <div role="option" data-value="owner">Owner</div>
+            </div>
+          </div>
+          <input type="hidden" name="team-role-jackson" value="">
+        </div>
+      </li>
+
+      <li class="flex items-center gap-4">
+        <span class="avatar" aria-label="Isabella Nguyen"><span>IN</span></span>
+        <div class="flex flex-col gap-1 mr-auto">
+          <h3 class="text-sm font-medium leading-none">Isabella Nguyen</h3>
+          <p class="text-sm text-muted-foreground">i@example.com</p>
+        </div>
+
+        <div id="team-role-isabella" class="select">
+          <button type="button" id="team-role-isabella-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="team-role-isabella-listbox">
+            <span class="truncate">Viewer</span>
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevrons-up-down-icon lucide-chevrons-up-down text-muted-foreground opacity-50 shrink-0"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
+          </button>
+          <div id="team-role-isabella-popover" data-popover aria-hidden="true" data-align="end">
+            <header>
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search-icon lucide-search"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input type="text" value="" placeholder="Search entries..." autocomplete="off" autocorrect="off" spellcheck="false" aria-autocomplete="list" role="combobox" aria-expanded="false" aria-controls="team-role-isabella-listbox" aria-labelledby="team-role-isabella-trigger">
+            </header>
+            <div role="listbox" id="team-role-isabella-listbox" aria-orientation="vertical" aria-labelledby="team-role-isabella-trigger">
+              <div role="option" data-value="viewer" aria-selected="true">Viewer</div>
+              <div role="option" data-value="developer">Developer</div>
+              <div role="option" data-value="billing">Billing</div>
+              <div role="option" data-value="owner">Owner</div>
+            </div>
+          </div>
+          <input type="hidden" name="team-role-isabella" value="viewer">
+        </div>
+      </li>
+    </ul>
+  </section>
+</div>
+{{end}}
